@@ -22,7 +22,7 @@ import { writeFileSync } from "fs";
 import { join } from "path";
 
 const BASES = ["A", "C", "G", "T"] as const;
-const OUTPUT_DIR = join(import.meta.dir, "../data/synthetic");
+const OUTPUT_DIR = join(import.meta.dir, "../../data/synthetic");
 
 interface FamilyConfig {
   /** Length of the simulated genome in bases */

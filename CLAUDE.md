@@ -25,10 +25,11 @@ GPU acceleration is provided via a custom pipeline: TypeScript DSL → C codegen
 1. **No external bioinformatics libraries.** Everything from scratch in TypeScript (CPU) or C (GPU kernels). This is the foundational rule.
 2. **No file over 300 lines.** If a file approaches 300 lines, split it. Prefer many small, focused files over few large ones.
 3. **TypeScript for all CPU-side code.** Bun runtime. ES modules. Strict mode.
-4. **C for GPU kernels and SPIR-V tooling.** Lives in `native/`. The TypeScript layer calls into these via FFI when available.
-5. **Every package must be independently usable.** Someone should be able to `npm install @yalumba/fastq` and use just the FASTQ parser. Or just the k-mer engine. Or just the math utilities.
-6. **Streaming first.** Prefer streaming/iterative APIs over loading everything into memory. Genomic files are large.
-7. **Deterministic outputs.** Same input → same output. No randomness in core algorithms unless explicitly seeded.
+4. **C for GPU kernels and SPIR-V tooling.** Lives in `packages/native/`. The TypeScript layer calls into these via FFI when available.
+5. **Keep the repo root clean.** Only config files (package.json, tsconfig, turbo.json, etc.) live at the root. All source code, tooling, and native code lives under `packages/` or `apps/`.
+6. **Every package must be independently usable.** Someone should be able to `npm install @yalumba/fastq` and use just the FASTQ parser. Or just the k-mer engine. Or just the math utilities.
+7. **Streaming first.** Prefer streaming/iterative APIs over loading everything into memory. Genomic files are large.
+8. **Deterministic outputs.** Same input → same output. No randomness in core algorithms unless explicitly seeded.
 
 ---
 
@@ -52,11 +53,13 @@ yalumba/
 │   ├── runtime/        # Pipeline orchestration, environment detection
 │   ├── io/             # Chunked file reading, buffer pools
 │   ├── compression/    # Gzip detection and decompression
-│   └── math/           # Bitset, popcount, statistics
-└── native/
-    ├── spirv-compiler/ # C tool: GLSL → SPIR-V compilation
-    ├── gpu-runtime/    # C library: Vulkan compute dispatch
-    └── kernels/        # C reference implementations + GLSL compute shaders
+│   ├── math/           # Bitset, popcount, statistics
+│   └── native/         # C/SPIR-V code (not a TS package — not in workspaces)
+│       ├── spirv-compiler/ # C tool: GLSL → SPIR-V compilation
+│       ├── gpu-runtime/    # C library: Vulkan compute dispatch
+│       └── kernels/        # C reference implementations + GLSL compute shaders
+│   └── tooling/        # Dev scripts (data generators, etc.)
+└── data/               # Generated data (gitignored FASTQ files)
 ```
 
 ---
