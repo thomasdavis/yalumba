@@ -1,0 +1,27 @@
+@import "tailwindcss";
+
+:root {
+  --color-bg: #0a0a0a;
+  --color-surface: #111111;
+  --color-surface-2: #1a1a1a;
+  --color-border: #262626;
+  --color-text: #e5e5e5;
+  --color-text-muted: #737373;
+  --color-accent: #22d3ee;
+  --color-accent-2: #a78bfa;
+  --color-dna-a: #22c55e;
+  --color-dna-c: #3b82f6;
+  --color-dna-g: #f59e0b;
+  --color-dna-t: #ef4444;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: "Berkeley Mono", "SF Mono", "Fira Code", ui-monospace, monospace;
+}
+
+::selection {
+  background: var(--color-accent);
+  color: var(--color-bg);
+}

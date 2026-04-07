@@ -12,11 +12,11 @@ dist/
 bun.lockb
 
 # native build artifacts
-native/*/build/
-native/*/*.o
-native/*/*.so
-native/*/*.dylib
-native/*/*.spv
+packages/native/*/build/
+packages/native/*/*.o
+packages/native/*/*.so
+packages/native/*/*.dylib
+packages/native/*/*.spv
 
 # os
 .DS_Store
@@ -40,5 +40,11 @@ coverage/
 tmp/
 *.tmp
 
-# generated data (re-generate with: bun run tooling/generate-family.ts)
+# generated/downloaded data
 data/synthetic/*.fastq
+data/ceph/*.cram
+data/ceph/*.cram.crai
+data/ceph/*.fastq.gz
+
+# next.js
+.next/

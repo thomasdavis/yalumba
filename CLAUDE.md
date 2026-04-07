@@ -240,9 +240,37 @@ TypeScript DSL (@yalumba/spirv SpirVBuilder)
   → GPU dispatch (@yalumba/gpu KernelDispatcher)
 ```
 
-For now, all kernels have CPU fallback implementations registered via `KernelDispatcher.registerCpuFallback()`. The native C implementations in `native/kernels/` serve as reference implementations and FFI acceleration targets.
+For now, all kernels have CPU fallback implementations registered via `KernelDispatcher.registerCpuFallback()`. The native C implementations in `packages/native/kernels/` serve as reference implementations and FFI acceleration targets.
 
 Browser path: WebGPU compute shaders will be an alternative backend for `@yalumba/gpu`.
+
+---
+
+## Docs app (apps/docs)
+
+The Next.js tutorial app at `apps/docs` is a living lab notebook that documents the entire analysis pipeline — processes, data sources, code examples, and results.
+
+**This app must be kept up to date as the analysis progresses.** When adding new pipeline stages, results, or data sources, update the relevant docs pages. When analysis results change, update the results page with current numbers.
+
+### Deployment
+
+The docs app is deployed to **Vercel on the `thomasdavis` account**. Push to main triggers automatic deployment.
+
+```bash
+# Local development
+bun run --filter @yalumba/docs dev
+
+# Build
+bun run --filter @yalumba/docs build
+```
+
+### Pages
+
+- `/` — Overview, pipeline summary, quick examples
+- `/pipeline` — Step-by-step walkthrough of each processing stage
+- `/data` — Data sources (synthetic family, CEPH 1463 pedigree)
+- `/results` — Analysis results (comparison matrices, relatedness estimates)
+- `/packages` — Package reference (exports, files, descriptions)
 
 ---
 
