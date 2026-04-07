@@ -1,0 +1,182 @@
+{
+  "lockfileVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "yalumba",
+      "devDependencies": {
+        "@types/bun": "^1.1.0",
+        "turbo": "^2.3.0",
+        "typescript": "^5.7.0",
+      },
+    },
+    "apps/benchmark": {
+      "name": "@yalumba/benchmark",
+      "version": "0.0.1",
+      "dependencies": {
+        "@yalumba/alignment": "workspace:*",
+        "@yalumba/fastq": "workspace:*",
+        "@yalumba/genome": "workspace:*",
+        "@yalumba/kmer": "workspace:*",
+      },
+    },
+    "apps/cli": {
+      "name": "@yalumba/cli",
+      "version": "0.0.1",
+      "bin": {
+        "yalumba": "dist/index.js",
+      },
+      "dependencies": {
+        "@yalumba/alignment": "workspace:*",
+        "@yalumba/fastq": "workspace:*",
+        "@yalumba/genome": "workspace:*",
+        "@yalumba/io": "workspace:*",
+        "@yalumba/kmer": "workspace:*",
+        "@yalumba/relatedness": "workspace:*",
+        "@yalumba/runtime": "workspace:*",
+        "@yalumba/vcf": "workspace:*",
+      },
+    },
+    "apps/playground": {
+      "name": "@yalumba/playground",
+      "version": "0.0.1",
+      "dependencies": {
+        "@yalumba/alignment": "workspace:*",
+        "@yalumba/fastq": "workspace:*",
+        "@yalumba/genome": "workspace:*",
+        "@yalumba/kmer": "workspace:*",
+        "@yalumba/relatedness": "workspace:*",
+      },
+    },
+    "packages/alignment": {
+      "name": "@yalumba/alignment",
+      "version": "0.0.1",
+      "dependencies": {
+        "@yalumba/genome": "workspace:*",
+        "@yalumba/kmer": "workspace:*",
+      },
+    },
+    "packages/compression": {
+      "name": "@yalumba/compression",
+      "version": "0.0.1",
+    },
+    "packages/fastq": {
+      "name": "@yalumba/fastq",
+      "version": "0.0.1",
+      "dependencies": {
+        "@yalumba/genome": "workspace:*",
+        "@yalumba/io": "workspace:*",
+      },
+    },
+    "packages/genome": {
+      "name": "@yalumba/genome",
+      "version": "0.0.1",
+      "dependencies": {
+        "@yalumba/math": "workspace:*",
+      },
+    },
+    "packages/gpu": {
+      "name": "@yalumba/gpu",
+      "version": "0.0.1",
+      "dependencies": {
+        "@yalumba/math": "workspace:*",
+      },
+    },
+    "packages/io": {
+      "name": "@yalumba/io",
+      "version": "0.0.1",
+    },
+    "packages/kmer": {
+      "name": "@yalumba/kmer",
+      "version": "0.0.1",
+      "dependencies": {
+        "@yalumba/genome": "workspace:*",
+        "@yalumba/math": "workspace:*",
+      },
+    },
+    "packages/math": {
+      "name": "@yalumba/math",
+      "version": "0.0.1",
+    },
+    "packages/relatedness": {
+      "name": "@yalumba/relatedness",
+      "version": "0.0.1",
+      "dependencies": {
+        "@yalumba/alignment": "workspace:*",
+        "@yalumba/kmer": "workspace:*",
+      },
+    },
+    "packages/runtime": {
+      "name": "@yalumba/runtime",
+      "version": "0.0.1",
+      "dependencies": {
+        "@yalumba/gpu": "workspace:*",
+      },
+    },
+    "packages/spirv": {
+      "name": "@yalumba/spirv",
+      "version": "0.0.1",
+    },
+    "packages/vcf": {
+      "name": "@yalumba/vcf",
+      "version": "0.0.1",
+      "dependencies": {
+        "@yalumba/genome": "workspace:*",
+      },
+    },
+  },
+  "packages": {
+    "@turbo/darwin-64": ["@turbo/darwin-64@2.9.5", "", { "os": "darwin", "cpu": "x64" }, "sha512-qPxhKsLMQP+9+dsmPgAGidi5uNifD4AoAOnEnljab3Qgn0QZRR31Hp+/CgW3Ia5AanWj6JuLLTBYvuQj4mqTWg=="],
+
+    "@turbo/darwin-arm64": ["@turbo/darwin-arm64@2.9.5", "", { "os": "darwin", "cpu": "arm64" }, "sha512-vkF/9F/l3aWd4bHxTui5Hh0F5xrTZ4e3rbBsc57zA6O8gNbmHN3B6eZ5psAIP2CnJRZ8ZxRjV3WZHeNXMXkPBw=="],
+
+    "@turbo/linux-64": ["@turbo/linux-64@2.9.5", "", { "os": "linux", "cpu": "x64" }, "sha512-z/Get5NUaUxm5HSGFqVMICDRjFNsCUhSc4wnFa/PP1QD0NXCjr7bu9a2EM6md/KMCBW0Qe393Ac+UM7/ryDDTw=="],
+
+    "@turbo/linux-arm64": ["@turbo/linux-arm64@2.9.5", "", { "os": "linux", "cpu": "arm64" }, "sha512-jyBifaNoI5/NheyswomiZXJvjdAdvT7hDRYzQ4meP0DKGvpXUjnqsD+4/J2YSDQ34OHxFkL30FnSCUIVOh2PHw=="],
+
+    "@turbo/windows-64": ["@turbo/windows-64@2.9.5", "", { "os": "win32", "cpu": "x64" }, "sha512-ph24K5uPtvo7UfuyDXnBiB/8XvrO+RQWbbw5zkA/bVNoy9HDiNoIJJj3s62MxT9tjEb6DnPje5PXSz1UR7QAyg=="],
+
+    "@turbo/windows-arm64": ["@turbo/windows-arm64@2.9.5", "", { "os": "win32", "cpu": "arm64" }, "sha512-6c5RccT/+iR39SdT1G5HyZaD2n57W77o+l0TTfxG/cVlhV94Acyg2gTQW7zUOhW1BeQpBjHzu9x8yVBZwrHh7g=="],
+
+    "@types/bun": ["@types/bun@1.3.11", "", { "dependencies": { "bun-types": "1.3.11" } }, "sha512-5vPne5QvtpjGpsGYXiFyycfpDF2ECyPcTSsFBMa0fraoxiQyMJ3SmuQIGhzPg2WJuWxVBoxWJ2kClYTcw/4fAg=="],
+
+    "@types/node": ["@types/node@25.5.2", "", { "dependencies": { "undici-types": "~7.18.0" } }, "sha512-tO4ZIRKNC+MDWV4qKVZe3Ql/woTnmHDr5JD8UI5hn2pwBrHEwOEMZK7WlNb5RKB6EoJ02gwmQS9OrjuFnZYdpg=="],
+
+    "@yalumba/alignment": ["@yalumba/alignment@workspace:packages/alignment"],
+
+    "@yalumba/benchmark": ["@yalumba/benchmark@workspace:apps/benchmark"],
+
+    "@yalumba/cli": ["@yalumba/cli@workspace:apps/cli"],
+
+    "@yalumba/compression": ["@yalumba/compression@workspace:packages/compression"],
+
+    "@yalumba/fastq": ["@yalumba/fastq@workspace:packages/fastq"],
+
+    "@yalumba/genome": ["@yalumba/genome@workspace:packages/genome"],
+
+    "@yalumba/gpu": ["@yalumba/gpu@workspace:packages/gpu"],
+
+    "@yalumba/io": ["@yalumba/io@workspace:packages/io"],
+
+    "@yalumba/kmer": ["@yalumba/kmer@workspace:packages/kmer"],
+
+    "@yalumba/math": ["@yalumba/math@workspace:packages/math"],
+
+    "@yalumba/playground": ["@yalumba/playground@workspace:apps/playground"],
+
+    "@yalumba/relatedness": ["@yalumba/relatedness@workspace:packages/relatedness"],
+
+    "@yalumba/runtime": ["@yalumba/runtime@workspace:packages/runtime"],
+
+    "@yalumba/spirv": ["@yalumba/spirv@workspace:packages/spirv"],
+
+    "@yalumba/vcf": ["@yalumba/vcf@workspace:packages/vcf"],
+
+    "bun-types": ["bun-types@1.3.11", "", { "dependencies": { "@types/node": "*" } }, "sha512-1KGPpoxQWl9f6wcZh57LvrPIInQMn2TQ7jsgxqpRzg+l0QPOFvJVH7HmvHo/AiPgwXy+/Thf6Ov3EdVn1vOabg=="],
+
+    "turbo": ["turbo@2.9.5", "", { "optionalDependencies": { "@turbo/darwin-64": "2.9.5", "@turbo/darwin-arm64": "2.9.5", "@turbo/linux-64": "2.9.5", "@turbo/linux-arm64": "2.9.5", "@turbo/windows-64": "2.9.5", "@turbo/windows-arm64": "2.9.5" }, "bin": { "turbo": "bin/turbo" } }, "sha512-JXNkRe6H6MjSlk5UQRTjyoKX5YN2zlc2632xcSlSFBao5yvbMWTpv9SNolOZlZmUlcDOHuszPLItbKrvcXnnZA=="],
+
+    "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+
+    "undici-types": ["undici-types@7.18.2", "", {}, "sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w=="],
+  }
+}

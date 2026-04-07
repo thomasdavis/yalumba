@@ -1,0 +1,27 @@
+{
+  "name": "yalumba",
+  "private": true,
+  "version": "0.0.1",
+  "description": "A vertically integrated genomics compute engine — FASTQ to relatedness metrics, TypeScript orchestration with custom GPU kernels",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "turbo build",
+    "test": "turbo test",
+    "lint": "turbo lint",
+    "typecheck": "turbo typecheck",
+    "clean": "turbo clean",
+    "dev": "turbo dev"
+  },
+  "devDependencies": {
+    "turbo": "^2.3.0",
+    "typescript": "^5.7.0",
+    "@types/bun": "^1.1.0"
+  },
+  "packageManager": "bun@1.1.0",
+  "engines": {
+    "bun": ">=1.1.0"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "name": "@yalumba/playground",
+  "version": "0.0.1",
+  "description": "Interactive playground for experimenting with yalumba packages",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "tsc -b",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@yalumba/fastq": "workspace:*",
+    "@yalumba/genome": "workspace:*",
+    "@yalumba/kmer": "workspace:*",
+    "@yalumba/alignment": "workspace:*",
+    "@yalumba/relatedness": "workspace:*"
+  }
+}

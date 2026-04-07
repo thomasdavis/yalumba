@@ -1,0 +1,44 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+*.tsbuildinfo
+
+# turbo
+.turbo/
+
+# bun
+bun.lockb
+
+# native build artifacts
+native/*/build/
+native/*/*.o
+native/*/*.so
+native/*/*.dylib
+native/*/*.spv
+
+# os
+.DS_Store
+Thumbs.db
+
+# env
+.env
+.env.*
+!.env.example
+
+# editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# test
+coverage/
+
+# temp
+tmp/
+*.tmp
+
+# generated data (re-generate with: bun run tooling/generate-family.ts)
+data/synthetic/*.fastq

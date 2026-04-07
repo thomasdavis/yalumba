@@ -1,0 +1,24 @@
+{
+  "name": "@yalumba/genome",
+  "version": "0.0.1",
+  "description": "DNA encoding, packed representation, and base-level operations",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "bun": "./src/index.ts",
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@yalumba/math": "workspace:*"
+  }
+}

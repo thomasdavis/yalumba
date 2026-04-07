@@ -1,0 +1,33 @@
+#version 450
+
+/**
+ * yalumba k-mer hashing compute shader
+ *
+ * Parallel k-mer hash computation on GPU.
+ * Each workgroup processes a chunk of the sequence.
+ */
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer SequenceBuffer {
+    uint sequence[];
+};
+
+layout(std430, binding = 1) writeonly buffer HashBuffer {
+    uvec2 hashes[];
+};
+
+layout(push_constant) uniform Params {
+    uint seq_length;
+    uint k;
+};
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    uint count = seq_length - k + 1;
+
+    if (gid >= count) return;
+
+    // Stub: actual hash computation goes here
+    hashes[gid] = uvec2(gid, 0);
+}

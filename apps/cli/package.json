@@ -1,0 +1,27 @@
+{
+  "name": "@yalumba/cli",
+  "version": "0.0.1",
+  "description": "Command-line interface for the yalumba genomics engine",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "yalumba": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "bun run src/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@yalumba/fastq": "workspace:*",
+    "@yalumba/genome": "workspace:*",
+    "@yalumba/kmer": "workspace:*",
+    "@yalumba/alignment": "workspace:*",
+    "@yalumba/relatedness": "workspace:*",
+    "@yalumba/vcf": "workspace:*",
+    "@yalumba/io": "workspace:*",
+    "@yalumba/runtime": "workspace:*"
+  }
+}
