@@ -80,13 +80,17 @@ async function main(ds: DatasetDef): Promise<void> {
     }
   }
 
-  Reporter.printLeaderboard(BenchmarkRunner.sort(results));
+  const sorted = BenchmarkRunner.sort(results);
+  Reporter.printLeaderboard(sorted);
 
   const detecting = results.filter((r) => r.correct).length;
   const detectingMother = results.filter((r) => r.detectsMother).length;
   console.log(`\nDataset: ${ds.id}`);
   console.log(`${detecting}/${results.length} detect related > unrelated`);
   console.log(`${detectingMother}/${results.length} detect ALL related pairs`);
+
+  const reportPath = join(ds.dataDir, "report.md");
+  Reporter.generateReport(sorted, ds, reportPath);
 }
 
 main(dataset).catch((err) => {

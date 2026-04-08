@@ -2,7 +2,7 @@
 
 /**
  * Run all experiments against the GIAB Ashkenazi trio dataset.
- * Caches results to disk — only re-runs when algorithm version changes.
+ * Caches results, generates markdown report.
  *
  * Usage: bun run packages/experiments/src/run-giab.ts
  * Force fresh: rm data/giab/.cache.json
@@ -15,6 +15,7 @@ import { loadDataset, GIAB_TRIO } from "./data-loader.js";
 import { ALL_EXPERIMENTS } from "./algorithms/index.js";
 
 const CACHE_PATH = join(GIAB_TRIO.dataDir, ".cache.json");
+const REPORT_PATH = join(GIAB_TRIO.dataDir, "report.md");
 
 async function main(): Promise<void> {
   console.log(`=== yalumba experiments — ${GIAB_TRIO.name} ===\n`);
@@ -41,12 +42,15 @@ async function main(): Promise<void> {
     }
   }
 
-  Reporter.printLeaderboard(BenchmarkRunner.sort(results));
+  const sorted = BenchmarkRunner.sort(results);
+  Reporter.printLeaderboard(sorted);
 
   const detecting = results.filter((r) => r.correct).length;
   const detectingMother = results.filter((r) => r.detectsMother).length;
   console.log(`\n${detecting}/${results.length} detect father-son`);
   console.log(`${detectingMother}/${results.length} detect BOTH parent-child pairs`);
+
+  Reporter.generateReport(sorted, GIAB_TRIO, REPORT_PATH);
 }
 
 main().catch((err) => {

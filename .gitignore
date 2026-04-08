@@ -46,6 +46,8 @@ data/ceph/*.cram
 data/ceph/*.cram.crai
 data/ceph/*.fastq.gz
 data/giab/*.fastq.gz
+data/*/.cache.json
+data/*/report.md
 
 # next.js
 .next/
