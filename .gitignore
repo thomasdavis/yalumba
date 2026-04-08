@@ -45,6 +45,7 @@ data/synthetic/*.fastq
 data/ceph/*.cram
 data/ceph/*.cram.crai
 data/ceph/*.fastq.gz
+data/giab/*.fastq.gz
 
 # next.js
 .next/
