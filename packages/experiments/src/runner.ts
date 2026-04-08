@@ -1,20 +1,59 @@
+import { existsSync, readFileSync, writeFileSync } from "fs";
 import type {
-  Experiment, SampleData, PairDef, AlgorithmResult, PairResult,
+  Experiment, SampleData, PairDef, AlgorithmResult, PairResult, ResultCache,
 } from "./types.js";
 
-/** Runs a set of experiments against loaded sample data */
+/** Runs experiments with disk-based caching keyed on name + version */
 export class BenchmarkRunner {
   private readonly samples: Map<string, SampleData>;
   private readonly pairs: readonly PairDef[];
+  private cache: Record<string, AlgorithmResult>;
+  private readonly cachePath: string | null;
 
-  constructor(samples: Map<string, SampleData>, pairs: readonly PairDef[]) {
+  constructor(
+    samples: Map<string, SampleData>,
+    pairs: readonly PairDef[],
+    cachePath?: string,
+  ) {
     this.samples = samples;
     this.pairs = pairs;
+    this.cachePath = cachePath ?? null;
+    this.cache = this.loadCache();
   }
 
-  /** Run a single experiment and return its results */
-  run(experiment: Experiment): AlgorithmResult {
-    // Subsample if needed
+  private cacheKey(exp: Experiment): string {
+    return `${exp.name}@v${exp.version}`;
+  }
+
+  private loadCache(): Record<string, AlgorithmResult> {
+    if (!this.cachePath || !existsSync(this.cachePath)) return {};
+    try {
+      const data: ResultCache = JSON.parse(readFileSync(this.cachePath, "utf-8"));
+      return data.results ?? {};
+    } catch {
+      return {};
+    }
+  }
+
+  private saveCache(): void {
+    if (!this.cachePath) return;
+    const data: ResultCache = { results: this.cache };
+    writeFileSync(this.cachePath, JSON.stringify(data, null, 2));
+  }
+
+  /** Run a single experiment (returns cached result if version matches) */
+  run(experiment: Experiment): { result: AlgorithmResult; cached: boolean } {
+    const key = this.cacheKey(experiment);
+    const cached = this.cache[key];
+    if (cached) return { result: cached, cached: true };
+
+    const result = this.execute(experiment);
+    this.cache[key] = result;
+    this.saveCache();
+    return { result, cached: false };
+  }
+
+  private execute(experiment: Experiment): AlgorithmResult {
     const maxReads = experiment.maxReadsPerSample ?? Infinity;
     const subsampled = new Map<string, SampleData>();
     for (const [id, sample] of this.samples) {
@@ -25,14 +64,12 @@ export class BenchmarkRunner {
       }
     }
 
-    // Prepare
     const prepStart = performance.now();
     const context = experiment.prepare
       ? experiment.prepare([...subsampled.values()])
       : undefined;
     const prepTimeMs = performance.now() - prepStart;
 
-    // Compare all pairs
     const pairResults: PairResult[] = [];
     const totalStart = performance.now();
 
@@ -57,7 +94,6 @@ export class BenchmarkRunner {
 
     const totalTimeMs = performance.now() - totalStart;
 
-    // Compute metrics
     const relatedScores = pairResults.filter((p) => p.related);
     const unrelatedScores = pairResults.filter((p) => !p.related);
     const avgRelated = relatedScores.reduce((s, p) => s + p.score, 0) / Math.max(1, relatedScores.length);
@@ -70,6 +106,7 @@ export class BenchmarkRunner {
 
     return {
       name: experiment.name,
+      version: experiment.version,
       description: experiment.description,
       pairs: pairResults,
       totalTimeMs: totalTimeMs + prepTimeMs,
@@ -81,11 +118,12 @@ export class BenchmarkRunner {
     };
   }
 
-  /** Run all experiments and return sorted results */
+  /** Run all experiments, using cache where available, return sorted */
   runAll(experiments: readonly Experiment[]): AlgorithmResult[] {
     const results: AlgorithmResult[] = [];
     for (const exp of experiments) {
-      results.push(this.run(exp));
+      const { result } = this.run(exp);
+      results.push(result);
     }
     return results.sort((a, b) => {
       if (a.correct !== b.correct) return a.correct ? -1 : 1;

@@ -15,6 +15,7 @@ import { canonicalHash } from "../hash-utils.js";
  */
 export const segmentCooperation: Experiment = {
   name: "Segment cooperation",
+  version: 1,
   description: "Symbiogenesis: co-occurring k-mer pairs at consistent spacing — structural co-inheritance",
   maxReadsPerSample: 200_000,
 

@@ -4,6 +4,7 @@ import { canonicalHash } from "../hash-utils.js";
 /** Exact k-mer set Jaccard similarity */
 export const kmerJaccard: Experiment = {
   name: "K-mer Jaccard (k=21)",
+  version: 1,
   description: "Exact set intersection of canonical 21-mers",
   maxReadsPerSample: 100_000,
 

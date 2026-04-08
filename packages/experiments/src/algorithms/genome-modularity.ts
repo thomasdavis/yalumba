@@ -16,6 +16,7 @@ import { fastHash } from "../hash-utils.js";
  */
 export const genomeModularity: Experiment = {
   name: "Genome modularity",
+  version: 1,
   description: "Symbiogenesis: cluster reads into modules, compare module frequency distributions",
   maxReadsPerSample: 500_000,
 

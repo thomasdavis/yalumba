@@ -2,8 +2,10 @@
 
 /**
  * Run all experiments against the GIAB Ashkenazi trio dataset.
+ * Caches results to disk — only re-runs when algorithm version changes.
  *
  * Usage: bun run packages/experiments/src/run-giab.ts
+ * Force fresh: rm data/giab/.cache.json
  */
 
 import { join } from "path";
@@ -13,6 +15,7 @@ import { loadSample, GIAB_SAMPLES, GIAB_PAIRS } from "./data-loader.js";
 import { ALL_EXPERIMENTS } from "./algorithms/index.js";
 
 const DATA_DIR = join(import.meta.dir, "../../../data/giab");
+const CACHE_PATH = join(DATA_DIR, ".cache.json");
 const MAX_READS = 2_000_000;
 
 async function main(): Promise<void> {
@@ -20,7 +23,6 @@ async function main(): Promise<void> {
   console.log(`HG003 (Father) + HG004 (Mother) → HG002 (Son)`);
   console.log(`${ALL_EXPERIMENTS.length} algorithms registered\n`);
 
-  // Load all samples
   const samples = new Map<string, Awaited<ReturnType<typeof loadSample>>>();
   for (const def of GIAB_SAMPLES) {
     process.stdout.write(`Loading ${def.id} (${def.role})... `);
@@ -32,22 +34,24 @@ async function main(): Promise<void> {
   }
   console.log();
 
-  // Run all experiments
-  const runner = new BenchmarkRunner(samples, GIAB_PAIRS);
+  const runner = new BenchmarkRunner(samples, GIAB_PAIRS, CACHE_PATH);
   const results = [];
 
   for (const experiment of ALL_EXPERIMENTS) {
-    process.stdout.write(`Running: ${experiment.name}... `);
+    process.stdout.write(`${experiment.name} (v${experiment.version})... `);
     try {
-      const result = runner.run(experiment);
+      const { result, cached } = runner.run(experiment);
       results.push(result);
-      Reporter.printDetail(result);
+      if (cached) {
+        console.log(`CACHED (sep=${(result.separation * 100).toFixed(4)}%)`);
+      } else {
+        Reporter.printDetail(result);
+      }
     } catch (err) {
       console.log(`FAILED: ${err}`);
     }
   }
 
-  // Sort and print leaderboard
   const sorted = results.sort((a, b) => {
     if (a.correct !== b.correct) return a.correct ? -1 : 1;
     if (a.detectsMother !== b.detectsMother) return a.detectsMother ? -1 : 1;
@@ -56,7 +60,6 @@ async function main(): Promise<void> {
 
   Reporter.printLeaderboard(sorted);
 
-  // Summary stats
   const detecting = sorted.filter((r) => r.correct).length;
   const detectingMother = sorted.filter((r) => r.detectsMother).length;
   console.log(`\n${detecting}/${sorted.length} detect father-son`);

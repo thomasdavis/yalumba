@@ -17,6 +17,8 @@ export interface ExperimentScore {
 export interface Experiment {
   /** Unique identifier */
   readonly name: string;
+  /** Version — bump to invalidate cache and force re-run */
+  readonly version: number;
   /** Short description */
   readonly description: string;
   /** Max reads needed per sample (runner subsamples to this) */
@@ -60,6 +62,7 @@ export interface PairResult {
 /** Complete result for one algorithm across all pairs */
 export interface AlgorithmResult {
   readonly name: string;
+  readonly version: number;
   readonly description: string;
   readonly pairs: readonly PairResult[];
   readonly totalTimeMs: number;
@@ -68,4 +71,9 @@ export interface AlgorithmResult {
   readonly correct: boolean;
   readonly motherSonGap: number;
   readonly detectsMother: boolean;
+}
+
+/** Cache file structure */
+export interface ResultCache {
+  readonly results: Record<string, AlgorithmResult>;
 }

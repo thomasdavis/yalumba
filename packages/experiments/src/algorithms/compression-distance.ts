@@ -6,6 +6,7 @@ import type { Experiment, SampleData, ExperimentScore } from "../types.js";
  */
 export const compressionDistance: Experiment = {
   name: "Compression distance (NCD)",
+  version: 1,
   description: "Gzip-based NCD of concatenated read sequences — lower NCD = more related",
   maxReadsPerSample: 50_000,
 

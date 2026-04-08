@@ -8,6 +8,7 @@ import type { Experiment, SampleData, ExperimentScore } from "../types.js";
  */
 export const hmmIbd: Experiment = {
   name: "HMM-IBD (2-state)",
+  version: 1,
   description: "Hidden Markov Model with IBD/non-IBD states over anchor-matched positions",
 
   compare(a: SampleData, b: SampleData): ExperimentScore {

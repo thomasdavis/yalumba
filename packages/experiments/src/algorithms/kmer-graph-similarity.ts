@@ -7,6 +7,7 @@ import { fastHash } from "../hash-utils.js";
  */
 export const kmerGraphSimilarity: Experiment = {
   name: "K-mer graph similarity (k=21)",
+  version: 1,
   description: "De Bruijn graph edge overlap — Jaccard of (k-1)-mer adjacency edges",
   maxReadsPerSample: 100_000,
 

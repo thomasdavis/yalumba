@@ -17,6 +17,7 @@ import { canonicalHash } from "../hash-utils.js";
  */
 export const recombinationDistance: Experiment = {
   name: "Recombination distance",
+  version: 1,
   description: "Symbiogenesis: avg length of consecutive shared k-mer runs — fewer breakpoints = more related",
   maxReadsPerSample: 100_000,
 

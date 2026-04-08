@@ -3,6 +3,7 @@ import type { Experiment, SampleData, ExperimentScore } from "../types.js";
 /** Three 40bp anchors at different positions per read */
 export const multiAnchorOverlap: Experiment = {
   name: "Multi-anchor overlap (40bp ×3)",
+  version: 1,
   description: "Three 40bp anchors per read at different offsets, compare non-anchor bases",
 
   compare(a: SampleData, b: SampleData): ExperimentScore {

@@ -3,6 +3,7 @@ import type { Experiment, SampleData, ExperimentScore } from "../types.js";
 /** Count reads appearing identically in both samples */
 export const sharedUniqueReads: Experiment = {
   name: "Shared unique reads",
+  version: 1,
   description: "Full 148bp exact read matching — Jaccard of unique read sets",
 
   compare(a: SampleData, b: SampleData): ExperimentScore {

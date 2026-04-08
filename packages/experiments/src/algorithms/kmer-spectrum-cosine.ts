@@ -5,6 +5,7 @@ import { InformationTheory } from "@yalumba/math";
 /** Cosine similarity of k-mer frequency vectors */
 export const kmerSpectrumCosine: Experiment = {
   name: "K-mer spectrum cosine (k=21)",
+  version: 1,
   description: "Cosine similarity of k-mer count vectors — robust to outliers unlike Pearson",
   maxReadsPerSample: 100_000,
 

@@ -7,6 +7,7 @@ import { canonicalHash } from "../hash-utils.js";
  */
 export const mutualInformationAlg: Experiment = {
   name: "Mutual information (k=21)",
+  version: 1,
   description: "MI between k-mer presence/absence in sample pairs — captures non-linear dependencies",
   maxReadsPerSample: 50_000,
 

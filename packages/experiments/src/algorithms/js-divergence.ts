@@ -5,6 +5,7 @@ import { InformationTheory } from "@yalumba/math";
 /** Jensen-Shannon divergence of k-mer frequency distributions */
 export const jsDivergence: Experiment = {
   name: "Jensen-Shannon divergence (k=21)",
+  version: 1,
   description: "Symmetric KL divergence of k-mer frequency distributions — lower JSD = more similar",
   maxReadsPerSample: 100_000,
 

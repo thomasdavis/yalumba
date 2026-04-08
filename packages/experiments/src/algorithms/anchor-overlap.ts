@@ -3,6 +3,7 @@ import type { Experiment, SampleData, ExperimentScore } from "../types.js";
 /** v1 baseline: exact 60bp prefix anchor, compare remaining bases */
 export const anchorOverlap: Experiment = {
   name: "Anchor overlap (60bp)",
+  version: 1,
   description: "Index reads by 60bp prefix (trim 10bp ends), compare identity of remaining bases",
 
   compare(a: SampleData, b: SampleData): ExperimentScore {

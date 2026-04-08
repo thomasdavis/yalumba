@@ -5,6 +5,7 @@ import { InformationTheory } from "@yalumba/math";
 /** Compare Shannon entropy of k-mer spectra — related samples have more similar entropy */
 export const kmerEntropy: Experiment = {
   name: "K-mer entropy similarity (k=21)",
+  version: 1,
   description: "1 - |entropy(A) - entropy(B)| / max_entropy — similar entropy = related",
   maxReadsPerSample: 100_000,
 

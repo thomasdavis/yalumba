@@ -7,6 +7,7 @@ const K = 21;
 /** Bottom-sketch MinHash — keep S smallest k-mer hashes */
 export const minhashSketch: Experiment = {
   name: "MinHash bottom-sketch (k=21)",
+  version: 1,
   description: `Keep ${SKETCH_SIZE} smallest canonical 21-mer hashes, compare sketch overlap`,
   maxReadsPerSample: 100_000,
 

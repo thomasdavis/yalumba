@@ -3,6 +3,7 @@ import type { Experiment, SampleData, ExperimentScore } from "../types.js";
 /** Seed-and-extend scored by overlap rate (not identity) — detects mother-son */
 export const seedExtendOverlapRate: Experiment = {
   name: "Seed-extend overlap rate",
+  version: 1,
   description: "30bp seed match, verify full-read identity >95%, score by verified overlap count per read",
 
   compare(a: SampleData, b: SampleData): ExperimentScore {

@@ -27,6 +27,16 @@ export { kmerDiversityIndex } from "./kmer-diversity-index.js";
 export { recombinationDistance } from "./recombination-distance.js";
 export { genomeModularity } from "./genome-modularity.js";
 
+// Run-length scanning algorithms
+export { runLengthDistribution } from "./run-length-distribution.js";
+export { runWeightedJaccard } from "./run-weighted-jaccard.js";
+export { runFragmentation } from "./run-fragmentation.js";
+export { runProfileNcd } from "./run-profile-ncd.js";
+export { endosymbioticTransfer } from "./endosymbiotic-transfer.js";
+export { gapRunRatio } from "./gap-run-ratio.js";
+export { kmerSynteny } from "./kmer-synteny.js";
+export { multiScaleRuns } from "./multi-scale-runs.js";
+
 import { anchorOverlap } from "./anchor-overlap.js";
 import { normalizedAnchorOverlap } from "./normalized-anchor-overlap.js";
 import { seedExtendOverlapRate } from "./seed-extend-overlap-rate.js";
@@ -48,6 +58,14 @@ import { segmentCooperation } from "./segment-cooperation.js";
 import { kmerDiversityIndex } from "./kmer-diversity-index.js";
 import { recombinationDistance } from "./recombination-distance.js";
 import { genomeModularity } from "./genome-modularity.js";
+import { runLengthDistribution } from "./run-length-distribution.js";
+import { runWeightedJaccard } from "./run-weighted-jaccard.js";
+import { runFragmentation } from "./run-fragmentation.js";
+import { runProfileNcd } from "./run-profile-ncd.js";
+import { endosymbioticTransfer } from "./endosymbiotic-transfer.js";
+import { gapRunRatio } from "./gap-run-ratio.js";
+import { kmerSynteny } from "./kmer-synteny.js";
+import { multiScaleRuns } from "./multi-scale-runs.js";
 
 /** All available experiments, ordered by expected signal strength */
 export const ALL_EXPERIMENTS: Experiment[] = [
@@ -79,4 +97,14 @@ export const ALL_EXPERIMENTS: Experiment[] = [
   kmerDiversityIndex,
   recombinationDistance,
   genomeModularity,
+
+  // Run-length scanning algorithms
+  runLengthDistribution,
+  runWeightedJaccard,
+  runFragmentation,
+  runProfileNcd,
+  endosymbioticTransfer,
+  gapRunRatio,
+  kmerSynteny,
+  multiScaleRuns,
 ];

@@ -16,6 +16,7 @@ import { canonicalHash } from "../hash-utils.js";
  */
 export const kmerEcosystem: Experiment = {
   name: "K-mer ecosystem (Bray-Curtis)",
+  version: 1,
   description: "Symbiogenesis: genome as ecosystem — Bray-Curtis dissimilarity of k-mer abundance profiles",
   maxReadsPerSample: 100_000,
 

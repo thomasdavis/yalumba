@@ -3,6 +3,7 @@ import type { Experiment, SampleData, ExperimentScore } from "../types.js";
 /** Simply count reads sharing a 50bp anchor — ratio as relatedness proxy */
 export const overlapCountRatio: Experiment = {
   name: "Overlap count ratio",
+  version: 1,
   description: "Count reads sharing a 50bp anchor (offset 10bp) — ratio of shared to total reads",
 
   compare(a: SampleData, b: SampleData): ExperimentScore {

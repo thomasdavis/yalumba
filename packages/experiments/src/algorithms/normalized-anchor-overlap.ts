@@ -37,6 +37,7 @@ function anchorIdentity(
 /** Anchor overlap normalized by self-similarity — removes batch effects */
 export const normalizedAnchorOverlap: Experiment = {
   name: "Normalized anchor overlap",
+  version: 1,
   description: "Cross-sample identity / self-similarity baseline — controls for sequencing batch effects",
 
   compare(a: SampleData, b: SampleData): ExperimentScore {
