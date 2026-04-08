@@ -76,6 +76,17 @@
       "name": "@yalumba/compression",
       "version": "0.0.1",
     },
+    "packages/experiments": {
+      "name": "@yalumba/experiments",
+      "version": "0.0.1",
+      "dependencies": {
+        "@yalumba/alignment": "workspace:*",
+        "@yalumba/fastq": "workspace:*",
+        "@yalumba/kmer": "workspace:*",
+        "@yalumba/math": "workspace:*",
+        "@yalumba/relatedness": "workspace:*",
+      },
+    },
     "packages/fastq": {
       "name": "@yalumba/fastq",
       "version": "0.0.1",
@@ -285,6 +296,8 @@
     "@yalumba/compression": ["@yalumba/compression@workspace:packages/compression"],
 
     "@yalumba/docs": ["@yalumba/docs@workspace:apps/docs"],
+
+    "@yalumba/experiments": ["@yalumba/experiments@workspace:packages/experiments"],
 
     "@yalumba/fastq": ["@yalumba/fastq@workspace:packages/fastq"],
 

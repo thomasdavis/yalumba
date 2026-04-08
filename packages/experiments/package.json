@@ -1,0 +1,28 @@
+{
+  "name": "@yalumba/experiments",
+  "version": "0.0.1",
+  "description": "Relatedness detection experiment framework — pluggable algorithms, benchmarking, and evaluation",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "bun": "./src/index.ts",
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@yalumba/fastq": "workspace:*",
+    "@yalumba/kmer": "workspace:*",
+    "@yalumba/alignment": "workspace:*",
+    "@yalumba/relatedness": "workspace:*",
+    "@yalumba/math": "workspace:*"
+  }
+}
