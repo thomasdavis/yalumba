@@ -20,6 +20,13 @@ export { hmmIbd } from "./hmm-ibd.js";
 export { kmerGraphSimilarity } from "./kmer-graph-similarity.js";
 export { mutualInformationAlg } from "./mutual-information.js";
 
+// Symbiogenesis-inspired algorithms
+export { kmerEcosystem } from "./kmer-ecosystem.js";
+export { segmentCooperation } from "./segment-cooperation.js";
+export { kmerDiversityIndex } from "./kmer-diversity-index.js";
+export { recombinationDistance } from "./recombination-distance.js";
+export { genomeModularity } from "./genome-modularity.js";
+
 import { anchorOverlap } from "./anchor-overlap.js";
 import { normalizedAnchorOverlap } from "./normalized-anchor-overlap.js";
 import { seedExtendOverlapRate } from "./seed-extend-overlap-rate.js";
@@ -36,6 +43,11 @@ import { kmerEntropy } from "./kmer-entropy.js";
 import { hmmIbd } from "./hmm-ibd.js";
 import { kmerGraphSimilarity } from "./kmer-graph-similarity.js";
 import { mutualInformationAlg } from "./mutual-information.js";
+import { kmerEcosystem } from "./kmer-ecosystem.js";
+import { segmentCooperation } from "./segment-cooperation.js";
+import { kmerDiversityIndex } from "./kmer-diversity-index.js";
+import { recombinationDistance } from "./recombination-distance.js";
+import { genomeModularity } from "./genome-modularity.js";
 
 /** All available experiments, ordered by expected signal strength */
 export const ALL_EXPERIMENTS: Experiment[] = [
@@ -60,4 +72,11 @@ export const ALL_EXPERIMENTS: Experiment[] = [
   hmmIbd,
   kmerGraphSimilarity,
   mutualInformationAlg,
+
+  // Symbiogenesis-inspired algorithms
+  kmerEcosystem,
+  segmentCooperation,
+  kmerDiversityIndex,
+  recombinationDistance,
+  genomeModularity,
 ];
