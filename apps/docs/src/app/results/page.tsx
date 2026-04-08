@@ -65,12 +65,61 @@ export default function ResultsPage() {
         </p>
       </Section>
 
-      <Section title="CEPH family 1463 — pending" id="ceph-results">
-        <div className="rounded-lg border border-dashed border-[var(--color-border)] bg-[var(--color-surface)] p-8 text-center">
-          <p className="text-[var(--color-text-muted)]">
-            Real data analysis in progress. Results will appear here as the
-            CEPH family exome data is processed through the pipeline.
+      <Section title="CEPH trio — 1000 Genomes (real data)" id="ceph-results">
+        <p className="text-[var(--color-text-muted)] mb-4">
+          Low-coverage whole-genome sequencing from the 1000 Genomes Project, phase 3.
+          NA12891 (father) + NA12892 (mother) → NA12878 (daughter).
+        </p>
+        <p className="text-[var(--color-text-muted)] mb-4">
+          Config: 50,000 reads per sample, 1.8M bases, k=21.
+        </p>
+
+        <div className="overflow-x-auto mb-6">
+          <table className="w-full text-sm border-collapse font-mono">
+            <thead>
+              <tr className="border-b border-[var(--color-border)]">
+                <th className="text-left py-2 pr-4 text-[var(--color-text-muted)]">Pair</th>
+                <th className="text-right py-2 px-4 text-[var(--color-text-muted)]">Jaccard</th>
+                <th className="text-right py-2 px-4 text-[var(--color-text-muted)]">Shared k-mers</th>
+                <th className="text-left py-2 pl-4 text-[var(--color-text-muted)]">Relationship</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[
+                ["NA12891 ↔ NA12892", "0.008120", "28,212", "Unrelated spouses"],
+                ["NA12891 ↔ NA12878", "0.006164", "21,602", "Father ↔ Daughter"],
+                ["NA12892 ↔ NA12878", "0.006284", "22,002", "Mother ↔ Daughter"],
+              ].map(([pair, score, shared, rel]) => (
+                <tr key={pair} className="border-b border-[var(--color-border)]">
+                  <td className="py-2 pr-4">{pair}</td>
+                  <td className="py-2 px-4 text-right text-[var(--color-accent)]">{score}</td>
+                  <td className="py-2 px-4 text-right">{shared}</td>
+                  <td className="py-2 pl-4 text-[var(--color-text-muted)]">{rel}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-5 space-y-3">
+          <h4 className="font-medium text-sm text-[var(--color-accent-2)]">Key finding</h4>
+          <p className="text-sm text-[var(--color-text-muted)]">
+            Raw k-mer Jaccard similarity on low-coverage shotgun reads does <strong className="text-[var(--color-text)]">not</strong> cleanly
+            separate related from unrelated individuals. The unrelated spouses (NA12891 ↔ NA12892) actually
+            show slightly <em>higher</em> Jaccard than parent-child pairs.
           </p>
+          <p className="text-sm text-[var(--color-text-muted)]">
+            This happens because at low coverage (~4x), random reads from two samples rarely land on
+            the same genomic positions. K-mer overlap is dominated by sequencing coverage overlap,
+            not genetic relatedness.
+          </p>
+          <h4 className="font-medium text-sm text-[var(--color-accent-2)] pt-2">Next steps</h4>
+          <ul className="text-sm text-[var(--color-text-muted)] list-disc pl-5 space-y-1">
+            <li>Align reads to a reference genome, then compare at overlapping positions</li>
+            <li>Use higher coverage data (exome or deep WGS) where read overlap is guaranteed</li>
+            <li>Implement a reference-free approach using MinHash on much larger read sets</li>
+            <li>Build a position-aware comparison that only scores regions with coverage in both samples</li>
+          </ul>
         </div>
       </Section>
     </div>
