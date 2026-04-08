@@ -49,6 +49,22 @@ export interface PairDef {
   readonly related: boolean;
 }
 
+/** A complete dataset definition */
+export interface DatasetDef {
+  /** Unique slug for this dataset (used in cache keys) */
+  readonly id: string;
+  /** Human-readable name */
+  readonly name: string;
+  /** Directory containing FASTQ files */
+  readonly dataDir: string;
+  /** Samples to load */
+  readonly samples: readonly SampleDef[];
+  /** Pairs to compare */
+  readonly pairs: readonly PairDef[];
+  /** Max reads to load per sample */
+  readonly maxReads: number;
+}
+
 /** Result for a single pair from one algorithm */
 export interface PairResult {
   readonly pair: string;
@@ -63,6 +79,7 @@ export interface PairResult {
 export interface AlgorithmResult {
   readonly name: string;
   readonly version: number;
+  readonly dataset: string;
   readonly description: string;
   readonly pairs: readonly PairResult[];
   readonly totalTimeMs: number;

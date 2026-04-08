@@ -1,28 +1,32 @@
-import { existsSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { dirname, join } from "path";
 import type {
   Experiment, SampleData, PairDef, AlgorithmResult, PairResult, ResultCache,
 } from "./types.js";
 
-/** Runs experiments with disk-based caching keyed on name + version */
+/** Runs experiments with disk-based caching keyed on dataset + name + version */
 export class BenchmarkRunner {
   private readonly samples: Map<string, SampleData>;
   private readonly pairs: readonly PairDef[];
+  private readonly datasetId: string;
   private cache: Record<string, AlgorithmResult>;
   private readonly cachePath: string | null;
 
   constructor(
     samples: Map<string, SampleData>,
     pairs: readonly PairDef[],
+    datasetId: string,
     cachePath?: string,
   ) {
     this.samples = samples;
     this.pairs = pairs;
+    this.datasetId = datasetId;
     this.cachePath = cachePath ?? null;
     this.cache = this.loadCache();
   }
 
   private cacheKey(exp: Experiment): string {
-    return `${exp.name}@v${exp.version}`;
+    return `${this.datasetId}::${exp.name}@v${exp.version}`;
   }
 
   private loadCache(): Record<string, AlgorithmResult> {
@@ -37,6 +41,8 @@ export class BenchmarkRunner {
 
   private saveCache(): void {
     if (!this.cachePath) return;
+    const dir = dirname(this.cachePath);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     const data: ResultCache = { results: this.cache };
     writeFileSync(this.cachePath, JSON.stringify(data, null, 2));
   }
@@ -100,13 +106,14 @@ export class BenchmarkRunner {
     const avgUnrelated = unrelatedScores.reduce((s, p) => s + p.score, 0) / Math.max(1, unrelatedScores.length);
     const separation = avgRelated - avgUnrelated;
 
-    const motherSon = pairResults.find((p) => p.label.includes("Mother"));
+    const motherSon = pairResults.find((p) => p.label.includes("Mother") || p.label.includes("Child"));
     const unrelated = pairResults.find((p) => !p.related);
     const motherSonGap = motherSon && unrelated ? motherSon.score - unrelated.score : 0;
 
     return {
       name: experiment.name,
       version: experiment.version,
+      dataset: this.datasetId,
       description: experiment.description,
       pairs: pairResults,
       totalTimeMs: totalTimeMs + prepTimeMs,
@@ -125,10 +132,18 @@ export class BenchmarkRunner {
       const { result } = this.run(exp);
       results.push(result);
     }
+    return this.sort(results);
+  }
+
+  static sort(results: AlgorithmResult[]): AlgorithmResult[] {
     return results.sort((a, b) => {
       if (a.correct !== b.correct) return a.correct ? -1 : 1;
       if (a.detectsMother !== b.detectsMother) return a.detectsMother ? -1 : 1;
       return Math.abs(b.separation) - Math.abs(a.separation);
     });
+  }
+
+  private sort(results: AlgorithmResult[]): AlgorithmResult[] {
+    return BenchmarkRunner.sort(results);
   }
 }
