@@ -271,6 +271,42 @@ bun run --filter @yalumba/docs build
 - `/data` — Data sources (synthetic family, CEPH 1463 pedigree)
 - `/results` — Analysis results (comparison matrices, relatedness estimates)
 - `/packages` — Package reference (exports, files, descriptions)
+- `/reports` — Published scientific reports with LaTeX-style rendering
+- `/reports/[slug]` — Individual report pages (Paper component, serif typography)
+
+---
+
+## Experiment workflow
+
+The project follows a research loop:
+
+1. **Hypothesize** — propose a new algorithm based on biological insight
+2. **Implement** — create a file in `packages/experiments/src/algorithms/` implementing the `Experiment` interface
+3. **Register** — add to `algorithms/index.ts` barrel export and `ALL_EXPERIMENTS` array
+4. **Benchmark** — run `bun run packages/experiments/src/run-giab.ts` against GIAB trio
+5. **Evaluate** — check leaderboard for separation, mother-son gap, timing
+6. **Document** — update results page and write a report in `apps/docs/src/app/reports/`
+7. **Deploy** — `cd apps/docs && vercel --prod` to publish to https://yalumba.vercel.app
+
+### Adding a new algorithm
+
+```typescript
+// packages/experiments/src/algorithms/my-algorithm.ts
+import type { Experiment, SampleData, ExperimentScore } from "../types.js";
+
+export const myAlgorithm: Experiment = {
+  name: "My algorithm",
+  description: "What it does",
+  maxReadsPerSample: 100_000,
+  compare(a, b) {
+    return { score: 0.95, detail: "metrics" };
+  },
+};
+```
+
+### Adding a new report
+
+Create a page at `apps/docs/src/app/reports/[slug]/page.tsx` using the `Paper` component from `@/components/paper`. Add the report entry to the listing in `apps/docs/src/app/reports/page.tsx`. Reports use serif typography with LaTeX-inspired layout.
 
 ---
 
