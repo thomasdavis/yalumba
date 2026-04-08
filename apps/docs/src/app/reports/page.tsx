@@ -3,10 +3,18 @@ import { Section } from "@/components/section";
 
 const reports = [
   {
-    slug: "algorithm-comparison-2026-04",
-    title: "Relatedness Detection Algorithm Comparison",
+    slug: "symbiogenesis-run-length-2026-04",
+    title: "Run-Length Symbiogenesis: 29 Algorithms for Reference-Free Relatedness Detection",
     date: "April 2026",
-    abstract: "21 algorithms benchmarked on GIAB Ashkenazi trio data. Symbiogenesis-inspired recombination distance produces 83x stronger signal than any classical approach. 18/21 algorithms detect both parent-child relationships including cross-batch mother-son.",
+    abstract: "29 algorithms benchmarked on GIAB and synthetic data. Run Length P90 achieves +250% separation on real data — 2.8x better than recombination distance. 8 new symbiogenesis-inspired run-length variants exploit the insight that IBD segments produce compressible patterns of consecutive shared k-mers. 24/29 detect both parent-child pairs including cross-batch mother-son. Multi-dataset framework with caching validates results on synthetic ground truth.",
+    authors: "yalumba project",
+    tags: ["symbiogenesis", "run-length", "IBD", "GIAB", "29 algorithms"],
+  },
+  {
+    slug: "algorithm-comparison-2026-04",
+    title: "Relatedness Detection Algorithm Comparison (v1)",
+    date: "April 2026",
+    abstract: "Initial 21-algorithm comparison. Symbiogenesis-inspired recombination distance produces 83x stronger signal than any classical approach. 18/21 algorithms detect both parent-child relationships.",
     authors: "yalumba project",
     tags: ["relatedness", "symbiogenesis", "k-mer", "GIAB"],
   },
