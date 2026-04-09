@@ -323,6 +323,27 @@ Create a page at `apps/docs/src/app/reports/[slug]/page.tsx` using the `Paper` c
 
 Reports are typically 500-800+ lines. The 300-line limit does NOT apply to report pages — only to package source code files. Reports are data-heavy documents that need space to present results properly.
 
+### LaTeX PDF generation
+
+Reports are also compiled to downloadable PDF via LaTeX:
+
+- **Document class:** `apps/docs/latex/yalumba.cls` — custom branded design with DNA-colored accents, modern typography, colored callout boxes
+- **Bibliography:** `apps/docs/latex/references.bib` — shared BibTeX database
+- **Build:** `bun run apps/docs/latex/build.ts` (requires `tectonic` — install with `brew install tectonic`)
+- **Output:** PDFs go to `apps/docs/public/reports/` and are served as static downloads
+- **Each .tex file** lives in `apps/docs/latex/reports/[slug].tex`
+
+The Paper component accepts a `slug` prop to show a "Download PDF" button linking to `/reports/[slug].pdf`.
+
+**Paper design must be BEAUTIFUL** — beyond traditional academic papers:
+- DNA-colored gradient bar at top of title page (A=green, C=blue, G=amber, T=red)
+- Cyan accent color for links, equation numbers, section underlines
+- Colored callout boxes: `keyfinding` (green), `limitation` (amber), `definition` (blue)
+- Dark-background code blocks with syntax highlighting
+- Professional booktabs tables with dark header rows
+- Branded header/footer with "yalumba" and page numbers
+- Everything rigorous for a scientific paper but the design taken to the next level
+
 ---
 
 ## Milestone roadmap

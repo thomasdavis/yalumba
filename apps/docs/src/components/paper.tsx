@@ -3,10 +3,11 @@ interface PaperProps {
   authors: string;
   date: string;
   abstract: string;
+  slug?: string;
   children: React.ReactNode;
 }
 
-export function Paper({ title, authors, date, abstract, children }: PaperProps) {
+export function Paper({ title, authors, date, abstract, slug, children }: PaperProps) {
   return (
     <article className="paper max-w-3xl mx-auto">
       <style>{`
@@ -30,6 +31,15 @@ export function Paper({ title, authors, date, abstract, children }: PaperProps) 
         <h1 className="text-3xl font-bold tracking-tight mb-3">{title}</h1>
         <p className="text-[var(--color-accent-2)] mb-1">{authors}</p>
         <p className="text-sm text-[var(--color-text-muted)]">{date}</p>
+        {slug && (
+          <a
+            href={`/reports/${slug}.pdf`}
+            download
+            className="inline-block mt-3 px-4 py-1.5 text-xs font-mono rounded border border-[var(--color-accent)] text-[var(--color-accent)] hover:bg-[var(--color-accent)] hover:text-[var(--color-bg)] transition-colors"
+          >
+            Download PDF
+          </a>
+        )}
       </header>
 
       <div className="abstract-box">
