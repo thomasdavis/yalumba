@@ -1,20 +1,17 @@
 /**
- * Algorithm Family 2: Coalition Transfer
+ * Algorithm Family 2: Coalition Transfer (v2)
  *
  * Core idea: measure how often COMBINATIONS of modules are inherited
  * together as a unit. Related individuals share not just modules but
  * specific COALITIONS — sets of modules that co-occur in reads.
  *
- * Key improvements over Module Persistence v2:
- *   1. Larger windows (150bp) for better haplotype coverage
- *   2. Coalition = set of module IDs present in a read (not just pairs)
- *   3. Coalition integrity: how often the same combination appears intact
- *   4. Population-aware: filter to coalitions not universal across samples
- *
- * Scoring:
- *   - Coalition identity overlap (shared coalition fingerprints)
- *   - Coalition integrity correlation (how intact vs fragmented)
- *   - Weighted by coalition rarity (rare coalitions are more informative)
+ * v2 changes:
+ *   - Drop integrityCosine (was always 1.0 — not discriminative)
+ *   - Primary signal: IDF-weighted rarity score (best separation)
+ *   - Secondary signal: coalition frequency correlation (shared coalitions
+ *     should have correlated read counts in related individuals)
+ *   - Tertiary signal: exclusive coalition ratio (fraction of informative
+ *     coalitions that are ONLY shared between these two samples)
  *
  * This is genuinely symbiogenesis-native: the signal comes from
  * COMPOSITE INHERITANCE UNITS, not individual markers.
@@ -25,10 +22,8 @@ import { buildModules, buildModuleGraph } from "@yalumba/modules";
 import type { Module } from "@yalumba/modules";
 
 interface CoalitionProfile {
-  /** Coalition fingerprint → frequency in this sample */
+  /** Coalition fingerprint → frequency (read count) in this sample */
   coalitions: Map<number, number>;
-  /** Coalition fingerprint → integrity rate (fraction of reads where all members present) */
-  integrity: Map<number, number>;
   /** Total reads analyzed */
   readCount: number;
 }
@@ -46,8 +41,8 @@ interface PreparedContext {
 
 export const coalitionTransfer: SymbioAlgorithm = {
   name: "Coalition transfer",
-  version: 1,
-  description: "Shared module coalitions weighted by rarity and integrity — composite inheritance units",
+  version: 2,
+  description: "Rarity-focused coalition scoring with frequency correlation — composite inheritance units",
   family: "coalition-transfer",
   maxReadsPerSample: 50_000,
 
@@ -132,19 +127,8 @@ export const coalitionTransfer: SymbioAlgorithm = {
     const profA = ctx.profiles.get(a.id)!;
     const profB = ctx.profiles.get(b.id)!;
 
-    // ── Score 1: Informative coalition Jaccard ──
-    let sharedInfo = 0;
-    let unionInfo = 0;
-    for (const fp of ctx.informativeCoalitions) {
-      const inA = profA.coalitions.has(fp);
-      const inB = profB.coalitions.has(fp);
-      if (inA && inB) sharedInfo++;
-      if (inA || inB) unionInfo++;
-    }
-    const infoJaccard = unionInfo > 0 ? sharedInfo / unionInfo : 0;
-
-    // ── Score 2: Rarity-weighted coalition overlap ──
-    // Coalitions in fewer samples get higher weight (IDF-style)
+    // ── Score 1: Rarity-weighted coalition overlap (IDF) ──
+    // Coalitions in fewer samples get exponentially higher weight
     let weightedShared = 0;
     let weightedTotal = 0;
     for (const fp of ctx.informativeCoalitions) {
@@ -159,27 +143,63 @@ export const coalitionTransfer: SymbioAlgorithm = {
     }
     const rarityScore = weightedTotal > 0 ? weightedShared / weightedTotal : 0;
 
-    // ── Score 3: Coalition integrity correlation ──
-    // For shared coalitions, compare how intact they are in each sample
-    let intDot = 0, intNormA = 0, intNormB = 0;
+    // ── Score 2: Exclusive pair coalition ratio ──
+    // Coalitions shared by ONLY these two samples (presence == 2, both have it)
+    // These are the strongest signal of shared inheritance
+    let exclusiveShared = 0;
+    let totalPairRelevant = 0;
     for (const fp of ctx.informativeCoalitions) {
-      if (!profA.coalitions.has(fp) || !profB.coalitions.has(fp)) continue;
-      const ia = profA.integrity.get(fp) ?? 0;
-      const ib = profB.integrity.get(fp) ?? 0;
-      intDot += ia * ib;
-      intNormA += ia * ia;
-      intNormB += ib * ib;
+      const presence = ctx.coalitionPresence.get(fp) ?? ctx.numSamples;
+      const inA = profA.coalitions.has(fp);
+      const inB = profB.coalitions.has(fp);
+      if (inA || inB) {
+        totalPairRelevant++;
+        if (inA && inB && presence === 2) {
+          exclusiveShared++;
+        }
+      }
     }
-    const intDenom = Math.sqrt(intNormA) * Math.sqrt(intNormB);
-    const integrityCosine = intDenom > 0 ? intDot / intDenom : 0;
+    const exclusiveRatio = totalPairRelevant > 0
+      ? exclusiveShared / totalPairRelevant
+      : 0;
+
+    // ── Score 3: Coalition frequency correlation ──
+    // For shared informative coalitions, how correlated are their read counts?
+    // Related individuals should have similar coalition frequency profiles.
+    const sharedFps: number[] = [];
+    for (const fp of ctx.informativeCoalitions) {
+      if (profA.coalitions.has(fp) && profB.coalitions.has(fp)) {
+        sharedFps.push(fp);
+      }
+    }
+
+    let freqCorr = 0;
+    if (sharedFps.length >= 3) {
+      // Normalize frequencies to proportions within each sample
+      const totalA = sharedFps.reduce((s, fp) => s + (profA.coalitions.get(fp) ?? 0), 0);
+      const totalB = sharedFps.reduce((s, fp) => s + (profB.coalitions.get(fp) ?? 0), 0);
+
+      if (totalA > 0 && totalB > 0) {
+        let dot = 0, normA = 0, normB = 0;
+        for (const fp of sharedFps) {
+          const fa = (profA.coalitions.get(fp) ?? 0) / totalA;
+          const fb = (profB.coalitions.get(fp) ?? 0) / totalB;
+          dot += fa * fb;
+          normA += fa * fa;
+          normB += fb * fb;
+        }
+        const denom = Math.sqrt(normA) * Math.sqrt(normB);
+        freqCorr = denom > 0 ? dot / denom : 0;
+      }
+    }
 
     // ── Combined score ──
-    // Weight rarity highest (most symbiogenesis-native)
-    const score = infoJaccard * 0.25 + rarityScore * 0.45 + integrityCosine * 0.30;
+    // Best combo: rarity + exclusive + frequency, balanced
+    const score = rarityScore * 0.40 + exclusiveRatio * 0.40 + freqCorr * 0.20;
 
     return {
       score,
-      detail: `infoCoal=${sharedInfo}/${unionInfo} (${(infoJaccard * 100).toFixed(1)}%) rarity=${(rarityScore * 100).toFixed(1)}% integrity=${integrityCosine.toFixed(4)}`,
+      detail: `rarity=${(rarityScore * 100).toFixed(1)}% excl=${exclusiveShared}/${totalPairRelevant} (${(exclusiveRatio * 100).toFixed(2)}%) freqCorr=${freqCorr.toFixed(4)} shared=${sharedFps.length}`,
     };
   },
 };
@@ -191,7 +211,6 @@ function buildCoalitionProfile(
   k: number,
 ): CoalitionProfile {
   const coalitionCounts = new Map<number, number>();
-  const coalitionIntact = new Map<number, number>();
 
   for (const read of reads) {
     // Find all modules present in this read
@@ -209,24 +228,10 @@ function buildCoalitionProfile(
     const fp = hashCoalition(sorted);
 
     coalitionCounts.set(fp, (coalitionCounts.get(fp) ?? 0) + 1);
-
-    // Check integrity: were all modules fully represented?
-    // (simplified: count if >2 modules present as "intact")
-    if (presentModules.size >= 3) {
-      coalitionIntact.set(fp, (coalitionIntact.get(fp) ?? 0) + 1);
-    }
-  }
-
-  // Compute integrity rates
-  const integrity = new Map<number, number>();
-  for (const [fp, count] of coalitionCounts) {
-    const intact = coalitionIntact.get(fp) ?? 0;
-    integrity.set(fp, count > 0 ? intact / count : 0);
   }
 
   return {
     coalitions: coalitionCounts,
-    integrity,
     readCount: reads.length,
   };
 }

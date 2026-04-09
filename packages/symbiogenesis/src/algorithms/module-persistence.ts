@@ -1,39 +1,44 @@
 /**
- * Algorithm Family 1: Module Persistence Graph (v2)
+ * Algorithm Family 1: Module Persistence Graph (v3)
  *
  * Key fix from v1: build a SHARED module vocabulary across all samples,
  * then map each sample's reads to that vocabulary. This ensures the same
  * biological module gets the same ID across all samples.
  *
- * Additionally: filter to modules that are NOT universal (present in
- * fewer than all samples) — these carry ancestry signal, analogous
- * to how rare k-mers carry more signal than common ones.
+ * v3 changes from v2:
+ *   - Removed edgeJaccard (86-89% for ALL pairs — not discriminative)
+ *   - Primary signal: informative module Jaccard (modules not in all samples)
+ *   - Added rarity-weighted overlap: shared modules weighted by inverse
+ *     sample frequency (rare shared modules = stronger relatedness signal)
+ *   - Support cosine retained but reweighted
  *
  * Compare samples by:
- *   1. Shared informative module identities
- *   2. Shared edge topology (module adjacency patterns)
- *   3. Module support correlation (similar usage frequencies)
+ *   1. Informative module overlap (Jaccard) — ancestry signal
+ *   2. Rarity-weighted module overlap — rare shared modules score higher
+ *   3. Module support correlation (cosine similarity)
  */
 
 import type { SymbioAlgorithm, SampleReads, ComparisonScore } from "../types.js";
-import { buildModules, buildModuleGraph } from "@yalumba/modules";
-import type { Module, ModuleGraph } from "@yalumba/modules";
+import { buildModules } from "@yalumba/modules";
+import type { Module } from "@yalumba/modules";
 
 interface PreparedContext {
   /** Shared module vocabulary (union across all samples) */
   sharedModules: Module[];
   /** Per-sample: which shared modules are present + their local support */
   samplePresence: Map<string, Map<number, number>>;
-  /** Per-sample module graphs using shared module IDs */
-  graphs: Map<string, ModuleGraph>;
   /** Modules present in fewer than all samples (informative) */
   informativeModuleIds: Set<number>;
+  /** How many samples each module appears in (for rarity weighting) */
+  modulePresenceCount: Map<number, number>;
+  /** Total number of samples */
+  sampleCount: number;
 }
 
 export const modulePersistence: SymbioAlgorithm = {
   name: "Module persistence graph",
-  version: 2,
-  description: "Shared module vocabulary + informative module filtering — graph topology of co-inherited modules",
+  version: 3,
+  description: "Rarity-weighted informative module overlap — rare shared modules carry strongest ancestry signal",
   family: "module-persistence",
   maxReadsPerSample: 50_000,
 
@@ -41,7 +46,7 @@ export const modulePersistence: SymbioAlgorithm = {
     const t0 = performance.now();
 
     // ── Step 1: Build modules per sample ──
-    console.log("    [v2] Step 1: Extract modules per sample...");
+    console.log("    [v3] Step 1: Extract modules per sample...");
     const perSampleModules = new Map<string, Module[]>();
 
     for (const sample of samples) {
@@ -58,7 +63,7 @@ export const modulePersistence: SymbioAlgorithm = {
 
     // ── Step 2: Build shared module vocabulary ──
     // Union all modules, deduplicate by member fingerprint
-    console.log("    [v2] Step 2: Building shared module vocabulary...");
+    console.log("    [v3] Step 2: Building shared module vocabulary...");
     const fpToModule = new Map<number, Module>();
     let sharedId = 0;
 
@@ -75,7 +80,7 @@ export const modulePersistence: SymbioAlgorithm = {
     console.log(`      ${sharedModules.length} unique modules in shared vocabulary`);
 
     // ── Step 3: Map each sample to shared vocabulary ──
-    console.log("    [v2] Step 3: Mapping samples to shared vocabulary...");
+    console.log("    [v3] Step 3: Mapping samples to shared vocabulary...");
     const samplePresence = new Map<string, Map<number, number>>();
 
     for (const [sampleId, modules] of perSampleModules) {
@@ -108,24 +113,14 @@ export const modulePersistence: SymbioAlgorithm = {
     }
     console.log(`      ${informativeModuleIds.size} informative modules (of ${sharedModules.length} total)`);
 
-    // ── Step 5: Build graphs using shared vocabulary ──
-    console.log("    [v2] Step 5: Building module graphs...");
-    const graphs = new Map<string, ModuleGraph>();
-    for (const sample of samples) {
-      const graph = buildModuleGraph(sample.reads, sharedModules, 15);
-      graphs.set(sample.id, graph);
-    }
-
-    console.log(`    [v2] Total prep: ${((performance.now() - t0) / 1000).toFixed(1)}s`);
-    return { sharedModules, samplePresence, graphs, informativeModuleIds };
+    console.log(`    [v3] Total prep: ${((performance.now() - t0) / 1000).toFixed(1)}s`);
+    return { sharedModules, samplePresence, informativeModuleIds, modulePresenceCount, sampleCount: samples.length };
   },
 
   compare(a: SampleReads, b: SampleReads, context: unknown): ComparisonScore {
     const ctx = context as PreparedContext;
     const presA = ctx.samplePresence.get(a.id)!;
     const presB = ctx.samplePresence.get(b.id)!;
-    const graphA = ctx.graphs.get(a.id)!;
-    const graphB = ctx.graphs.get(b.id)!;
 
     // ── Score 1: Informative module overlap (Jaccard) ──
     let sharedInformative = 0;
@@ -138,17 +133,21 @@ export const modulePersistence: SymbioAlgorithm = {
     }
     const infoJaccard = unionInformative > 0 ? sharedInformative / unionInformative : 0;
 
-    // ── Score 2: Edge topology overlap (informative edges only) ──
-    const edgeFpA = buildInformativeEdgeFPs(graphA, ctx.informativeModuleIds);
-    const edgeFpB = buildInformativeEdgeFPs(graphB, ctx.informativeModuleIds);
+    // ── Score 2: Rarity-weighted overlap ──
+    // Shared modules weighted by log(N / count) — rarer modules score higher
+    let rarityNumer = 0;
+    let rarityDenom = 0;
+    for (const modId of ctx.informativeModuleIds) {
+      const inA = presA.has(modId);
+      const inB = presB.has(modId);
+      const count = ctx.modulePresenceCount.get(modId) ?? ctx.sampleCount;
+      const weight = Math.log(ctx.sampleCount / count);
+      if (inA && inB) rarityNumer += weight;
+      if (inA || inB) rarityDenom += weight;
+    }
+    const rarityJaccard = rarityDenom > 0 ? rarityNumer / rarityDenom : 0;
 
-    let sharedEdges = 0;
-    for (const efp of edgeFpA) { if (edgeFpB.has(efp)) sharedEdges++; }
-    const edgeUnion = edgeFpA.size + edgeFpB.size - sharedEdges;
-    const edgeJaccard = edgeUnion > 0 ? sharedEdges / edgeUnion : 0;
-
-    // ── Score 3: Module support correlation ──
-    // For shared informative modules, compare their support values
+    // ── Score 3: Module support correlation (informative only) ──
     let dot = 0, normA = 0, normB = 0;
     for (const modId of ctx.informativeModuleIds) {
       const va = presA.get(modId) ?? 0;
@@ -160,12 +159,12 @@ export const modulePersistence: SymbioAlgorithm = {
     const denom = Math.sqrt(normA) * Math.sqrt(normB);
     const supportCosine = denom > 0 ? dot / denom : 0;
 
-    // Combined: weight edge topology highest (most symbiogenesis-native)
-    const score = infoJaccard * 0.3 + edgeJaccard * 0.4 + supportCosine * 0.3;
+    // Rarity + cosine (no Jaccard — it has overlap between groups)
+    const score = rarityJaccard * 0.55 + supportCosine * 0.45;
 
     return {
       score,
-      detail: `infoMod=${sharedInformative}/${unionInformative} (${(infoJaccard * 100).toFixed(1)}%) edges=${sharedEdges}/${edgeUnion} (${(edgeJaccard * 100).toFixed(1)}%) cosine=${supportCosine.toFixed(4)}`,
+      detail: `infoMod=${sharedInformative}/${unionInformative} (${(infoJaccard * 100).toFixed(1)}%) rarity=${(rarityJaccard * 100).toFixed(1)}% cosine=${supportCosine.toFixed(4)}`,
     };
   },
 };
@@ -178,16 +177,4 @@ function moduleFingerprint(members: readonly number[]): number {
     h = Math.imul(h, 0x01000193);
   }
   return h >>> 0;
-}
-
-function buildInformativeEdgeFPs(graph: ModuleGraph, informative: Set<number>): Set<number> {
-  const fps = new Set<number>();
-  for (const edge of graph.edges) {
-    // Only count edges where at least one module is informative
-    if (!informative.has(edge.from) && !informative.has(edge.to)) continue;
-    const a = Math.min(edge.from, edge.to);
-    const b = Math.max(edge.from, edge.to);
-    fps.add(((a * 31) + b) >>> 0);
-  }
-  return fps;
 }

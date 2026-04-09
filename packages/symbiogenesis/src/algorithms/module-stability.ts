@@ -4,96 +4,103 @@
  * Core question: Are modules REAL biological structures or sampling artifacts?
  *
  * Method: Bootstrap resampling of reads, rebuild modules each time,
- * measure which modules reconstruct consistently. True inheritance
- * subsystems should be stable under resampling because they're
- * backed by real genomic structure. Noise modules will fluctuate.
+ * measure which MOTIFS consistently appear in stable modules.
+ * Related individuals share the same genomic subsystems, so the
+ * same motifs should be stably organized into modules.
  *
- * Scoring: For each pair of individuals, compare their STABLE module
- * sets (modules that survive resampling). Related individuals should
- * share more stable modules because they inherited the same genomic
- * subsystems from common ancestors.
+ * Key insight (v2): Module fingerprints (exact member sets) are too
+ * brittle — they almost never match across samples because module
+ * boundary detection is noisy. Instead, track MOTIF-LEVEL stability:
+ * for each motif, measure how often it appears in ANY module across
+ * bootstrap iterations. Related individuals will have correlated
+ * motif stability profiles because they inherited the same genomic
+ * subsystems.
+ *
+ * v2 changes:
+ * - Track per-motif stability instead of per-module fingerprints
+ * - Drop countRatio (coverage proxy, not genetics proxy)
+ * - Lower stability threshold for more signal
+ * - More bootstraps for reliability
+ * - Use stability-weighted motif Jaccard + cosine similarity
  *
  * This is genuinely symbiogenesis-native: the signal comes from
  * PERSISTENT SUBSYSTEM IDENTITY under perturbation, not sequence
  * continuity or token rarity.
- *
- * Addresses the critique: "module definition instability" — this
- * algorithm explicitly measures and exploits stability.
  */
 
 import type { SymbioAlgorithm, SampleReads, ComparisonScore } from "../types.js";
 import { buildModules } from "@yalumba/modules";
-import type { Module } from "@yalumba/modules";
 
-const NUM_BOOTSTRAPS = 5;
-const SUBSAMPLE_FRACTION = 0.6; // Use 60% of reads per bootstrap
-const STABILITY_THRESHOLD = 0.6; // Module must appear in >60% of bootstraps
+const NUM_BOOTSTRAPS = 8;
+const SUBSAMPLE_FRACTION = 0.6;
+const STABILITY_THRESHOLD = 0.4; // Motif must be in a module in >40% of bootstraps
 
-interface StabilityProfile {
-  /** Module fingerprints that appear in >60% of bootstrap iterations */
-  stableModules: Set<number>;
-  /** Module fingerprint → fraction of bootstraps where it appeared */
-  moduleStability: Map<number, number>;
-  /** Total unique modules across all bootstraps */
-  totalModules: number;
-  /** Number that pass stability threshold */
-  stableCount: number;
+interface MotifStabilityProfile {
+  /** Motif hash → fraction of bootstraps where it appeared in ANY module */
+  motifStability: Map<number, number>;
+  /** Motifs that pass the stability threshold */
+  stableMotifs: Set<number>;
+  /** Total unique motifs seen in modules across all bootstraps */
+  totalMotifs: number;
+  /** Fraction of motifs that are stable (for diagnostics) */
+  stableFraction: number;
 }
 
 interface PreparedContext {
-  profiles: Map<string, StabilityProfile>;
-  /** Stable modules shared across <all samples (informative) */
-  informativeStable: Set<number>;
+  profiles: Map<string, MotifStabilityProfile>;
+  /** All motifs that are stable in at least one sample but not all */
+  informativeMotifs: Set<number>;
+  /** All motifs that are stable in at least one sample */
+  allStableMotifs: Set<number>;
 }
 
 export const moduleStability: SymbioAlgorithm = {
   name: "Module clustering stability",
-  version: 1,
-  description: "Bootstrap module reconstruction — stable modules indicate real inheritance subsystems",
+  version: 2,
+  description: "Bootstrap module reconstruction — motif-level stability profiles reveal shared inheritance",
   family: "coalition-transfer",
-  maxReadsPerSample: 30_000, // Lower because we run multiple bootstraps
+  maxReadsPerSample: 30_000,
 
   prepare(samples): PreparedContext {
     const t0 = performance.now();
 
-    console.log(`    [stability] ${NUM_BOOTSTRAPS} bootstrap iterations, ${(SUBSAMPLE_FRACTION * 100).toFixed(0)}% subsample, threshold=${STABILITY_THRESHOLD}`);
+    console.log(`    [stability-v2] ${NUM_BOOTSTRAPS} bootstraps, ${(SUBSAMPLE_FRACTION * 100).toFixed(0)}% subsample, motif threshold=${STABILITY_THRESHOLD}`);
 
-    // ── Build stability profiles per sample ──
-    const profiles = new Map<string, StabilityProfile>();
+    // ── Build motif stability profiles per sample ──
+    const profiles = new Map<string, MotifStabilityProfile>();
 
     for (const sample of samples) {
       const st = performance.now();
       console.log(`      ${sample.id}: bootstrapping...`);
-      const profile = buildStabilityProfile(sample.reads);
+      const profile = buildMotifStabilityProfile(sample.reads);
       profiles.set(sample.id, profile);
-      console.log(`        ${profile.stableCount} stable / ${profile.totalModules} total modules (${((performance.now() - st) / 1000).toFixed(1)}s)`);
+      console.log(`        ${profile.stableMotifs.size} stable motifs / ${profile.totalMotifs} total (${(profile.stableFraction * 100).toFixed(1)}% stable) (${((performance.now() - st) / 1000).toFixed(1)}s)`);
     }
 
-    // ── Find informative stable modules (not in all samples) ──
+    // ── Find informative stable motifs ──
+    // A motif is "informative" if it is stable in at least one sample
+    // but NOT stable in all samples (universal motifs don't distinguish)
     const stablePresence = new Map<number, number>();
     for (const [, profile] of profiles) {
-      for (const fp of profile.stableModules) {
-        stablePresence.set(fp, (stablePresence.get(fp) ?? 0) + 1);
+      for (const motif of profile.stableMotifs) {
+        stablePresence.set(motif, (stablePresence.get(motif) ?? 0) + 1);
       }
     }
 
-    const informativeStable = new Set<number>();
-    for (const [fp, count] of stablePresence) {
+    const allStableMotifs = new Set<number>();
+    const informativeMotifs = new Set<number>();
+    for (const [motif, count] of stablePresence) {
+      allStableMotifs.add(motif);
       if (count < samples.length) {
-        informativeStable.add(fp);
+        informativeMotifs.add(motif);
       }
     }
 
-    const totalStable = new Set<number>();
-    for (const [, p] of profiles) {
-      for (const fp of p.stableModules) totalStable.add(fp);
-    }
+    console.log(`      Total unique stable motifs: ${allStableMotifs.size}`);
+    console.log(`      Informative (not universal): ${informativeMotifs.size}`);
+    console.log(`    [stability-v2] Total prep: ${((performance.now() - t0) / 1000).toFixed(1)}s`);
 
-    console.log(`      Total unique stable modules: ${totalStable.size}`);
-    console.log(`      Informative (not universal): ${informativeStable.size}`);
-    console.log(`    [stability] Total prep: ${((performance.now() - t0) / 1000).toFixed(1)}s`);
-
-    return { profiles, informativeStable };
+    return { profiles, informativeMotifs, allStableMotifs };
   },
 
   compare(a: SampleReads, b: SampleReads, context: unknown): ComparisonScore {
@@ -101,55 +108,54 @@ export const moduleStability: SymbioAlgorithm = {
     const profA = ctx.profiles.get(a.id)!;
     const profB = ctx.profiles.get(b.id)!;
 
-    // ── Score 1: Informative stable module Jaccard ──
+    // ── Score 1: Informative stable motif Jaccard ──
+    // How many informative motifs are stably modular in BOTH samples?
     let sharedStable = 0;
     let unionStable = 0;
-    for (const fp of ctx.informativeStable) {
-      const inA = profA.stableModules.has(fp);
-      const inB = profB.stableModules.has(fp);
+    for (const motif of ctx.informativeMotifs) {
+      const inA = profA.stableMotifs.has(motif);
+      const inB = profB.stableMotifs.has(motif);
       if (inA && inB) sharedStable++;
       if (inA || inB) unionStable++;
     }
-    const stableJaccard = unionStable > 0 ? sharedStable / unionStable : 0;
+    const motifJaccard = unionStable > 0 ? sharedStable / unionStable : 0;
 
-    // ── Score 2: Stability correlation ──
-    // For shared stable modules, compare HOW stable they are in each sample
-    let stabDot = 0, stabNormA = 0, stabNormB = 0;
-    for (const fp of ctx.informativeStable) {
-      const sa = profA.moduleStability.get(fp) ?? 0;
-      const sb = profB.moduleStability.get(fp) ?? 0;
-      stabDot += sa * sb;
-      stabNormA += sa * sa;
-      stabNormB += sb * sb;
+    // ── Score 2: Stability cosine similarity ──
+    // Compare HOW stable each motif is across the two samples.
+    // Uses ALL informative motifs (not just those passing threshold),
+    // since partial stability values carry signal.
+    let dot = 0, normA = 0, normB = 0;
+    for (const motif of ctx.informativeMotifs) {
+      const sa = profA.motifStability.get(motif) ?? 0;
+      const sb = profB.motifStability.get(motif) ?? 0;
+      dot += sa * sb;
+      normA += sa * sa;
+      normB += sb * sb;
     }
-    const stabDenom = Math.sqrt(stabNormA) * Math.sqrt(stabNormB);
-    const stabilityCosine = stabDenom > 0 ? stabDot / stabDenom : 0;
-
-    // ── Score 3: Stable module count ratio ──
-    // Related individuals should have similar numbers of stable modules
-    const countRatio = Math.min(profA.stableCount, profB.stableCount) /
-                       Math.max(profA.stableCount, profB.stableCount);
+    const denom = Math.sqrt(normA) * Math.sqrt(normB);
+    const stabCosine = denom > 0 ? dot / denom : 0;
 
     // ── Combined score ──
-    const score = stableJaccard * 0.45 + stabilityCosine * 0.35 + countRatio * 0.20;
+    // Jaccard captures shared module membership;
+    // Cosine captures correlated stability patterns
+    const score = motifJaccard * 0.55 + stabCosine * 0.45;
 
     return {
       score,
-      detail: `stableShared=${sharedStable}/${unionStable} (${(stableJaccard * 100).toFixed(1)}%) stabCos=${stabilityCosine.toFixed(4)} countRatio=${countRatio.toFixed(3)} stA=${profA.stableCount} stB=${profB.stableCount}`,
+      detail: `motifJacc=${sharedStable}/${unionStable} (${(motifJaccard * 100).toFixed(1)}%) stabCos=${stabCosine.toFixed(4)} stableA=${profA.stableMotifs.size} stableB=${profB.stableMotifs.size}`,
     };
   },
 };
 
-/** Build a stability profile by bootstrapping module extraction */
-function buildStabilityProfile(reads: readonly string[]): StabilityProfile {
-  const moduleAppearances = new Map<number, number>(); // fp → count of bootstraps where it appeared
-  const allModuleFps = new Set<number>();
+/** Build a motif-level stability profile by bootstrapping */
+function buildMotifStabilityProfile(reads: readonly string[]): MotifStabilityProfile {
+  // Track: motif hash → how many bootstraps it appeared in a module
+  const motifAppearances = new Map<number, number>();
+  const allMotifs = new Set<number>();
 
   for (let b = 0; b < NUM_BOOTSTRAPS; b++) {
-    // Subsample reads (random 60%)
     const subsample = bootstrapSample(reads, SUBSAMPLE_FRACTION);
 
-    // Build modules on this subsample
     const modules = buildModules(subsample, {
       motifK: 15,
       windowSize: 150,
@@ -157,36 +163,40 @@ function buildStabilityProfile(reads: readonly string[]): StabilityProfile {
       minCohesion: 0.25,
     });
 
-    // Record which modules appeared in this bootstrap
-    const bootstrapFps = new Set<number>();
+    // Collect all unique motifs that appeared in ANY module this bootstrap
+    const bootstrapMotifs = new Set<number>();
     for (const mod of modules) {
-      const fp = hashMembers(mod.members);
-      bootstrapFps.add(fp);
-      allModuleFps.add(fp);
+      for (const member of mod.members) {
+        bootstrapMotifs.add(member);
+        allMotifs.add(member);
+      }
     }
 
-    for (const fp of bootstrapFps) {
-      moduleAppearances.set(fp, (moduleAppearances.get(fp) ?? 0) + 1);
+    for (const motif of bootstrapMotifs) {
+      motifAppearances.set(motif, (motifAppearances.get(motif) ?? 0) + 1);
     }
   }
 
-  // Compute stability scores
-  const moduleStability = new Map<number, number>();
-  const stableModules = new Set<number>();
+  // Compute stability scores per motif
+  const motifStability = new Map<number, number>();
+  const stableMotifs = new Set<number>();
 
-  for (const [fp, appearances] of moduleAppearances) {
+  for (const [motif, appearances] of motifAppearances) {
     const stability = appearances / NUM_BOOTSTRAPS;
-    moduleStability.set(fp, stability);
+    motifStability.set(motif, stability);
     if (stability >= STABILITY_THRESHOLD) {
-      stableModules.add(fp);
+      stableMotifs.add(motif);
     }
   }
+
+  const totalMotifs = allMotifs.size;
+  const stableFraction = totalMotifs > 0 ? stableMotifs.size / totalMotifs : 0;
 
   return {
-    stableModules,
-    moduleStability,
-    totalModules: allModuleFps.size,
-    stableCount: stableModules.size,
+    motifStability,
+    stableMotifs,
+    totalMotifs,
+    stableFraction,
   };
 }
 
@@ -198,14 +208,4 @@ function bootstrapSample(reads: readonly string[], fraction: number): string[] {
     indices.add(Math.floor(Math.random() * reads.length));
   }
   return [...indices].map((i) => reads[i]!);
-}
-
-function hashMembers(members: readonly number[]): number {
-  const sorted = [...members].sort((a, b) => a - b);
-  let h = 0x811c9dc5 | 0;
-  for (const m of sorted) {
-    h ^= m;
-    h = Math.imul(h, 0x01000193);
-  }
-  return h >>> 0;
 }
