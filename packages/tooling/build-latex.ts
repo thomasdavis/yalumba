@@ -8,7 +8,7 @@
 import { readdirSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 
-const LATEX_DIR = import.meta.dir;
+const LATEX_DIR = join(import.meta.dir, "../../apps/docs/latex");
 const REPORTS_DIR = join(LATEX_DIR, "reports");
 const OUTPUT_DIR = join(LATEX_DIR, "../public/reports");
 
