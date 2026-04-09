@@ -308,6 +308,20 @@ export const myAlgorithm: Experiment = {
 
 Create a page at `apps/docs/src/app/reports/[slug]/page.tsx` using the `Paper` component from `@/components/paper`. Add the report entry to the listing in `apps/docs/src/app/reports/page.tsx`. Reports use serif typography with LaTeX-inspired layout.
 
+**Reports must be comprehensive scientific documents.** They are NOT summaries — they are detailed papers covering everything that matters. A good report includes:
+
+- **Full algorithm catalogue** — every algorithm listed with description, category, maxReads
+- **Per-pair score tables** — not just averages, show individual pair scores for top algorithms
+- **Per-dataset analysis** — separate sections for each dataset with their own tables
+- **Failure analysis** — why specific algorithms fail, categorized by failure mode
+- **Mathematical analysis** — equations for key metrics (sharing probability, expected run length)
+- **Pedigree diagrams** — ASCII art showing family structure and relationships
+- **Connection to theory** — how results relate to classical IBD, population genetics
+- **Practical recommendations** — when to use which algorithm, memory/time tradeoffs
+- **Honest limitations** — what wasn't tested, what could be better
+
+Reports are typically 500-800+ lines. The 300-line limit does NOT apply to report pages — only to package source code files. Reports are data-heavy documents that need space to present results properly.
+
 ---
 
 ## Milestone roadmap
