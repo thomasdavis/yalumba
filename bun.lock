@@ -84,18 +84,6 @@
         "@yalumba/math": "workspace:*",
       },
     },
-    "packages/experiments": {
-      "name": "@yalumba/experiments",
-      "version": "0.0.1",
-      "dependencies": {
-        "@yalumba/alignment": "workspace:*",
-        "@yalumba/compute": "workspace:*",
-        "@yalumba/fastq": "workspace:*",
-        "@yalumba/kmer": "workspace:*",
-        "@yalumba/math": "workspace:*",
-        "@yalumba/relatedness": "workspace:*",
-      },
-    },
     "packages/fastq": {
       "name": "@yalumba/fastq",
       "version": "0.0.1",
@@ -134,6 +122,13 @@
       "name": "@yalumba/math",
       "version": "0.0.1",
     },
+    "packages/modules": {
+      "name": "@yalumba/modules",
+      "version": "0.0.1",
+      "dependencies": {
+        "@yalumba/math": "workspace:*",
+      },
+    },
     "packages/relatedness": {
       "name": "@yalumba/relatedness",
       "version": "0.0.1",
@@ -152,6 +147,15 @@
     "packages/spirv": {
       "name": "@yalumba/spirv",
       "version": "0.0.1",
+    },
+    "packages/symbiogenesis": {
+      "name": "@yalumba/symbiogenesis",
+      "version": "0.0.1",
+      "dependencies": {
+        "@yalumba/fastq": "workspace:*",
+        "@yalumba/math": "workspace:*",
+        "@yalumba/modules": "workspace:*",
+      },
     },
     "packages/vcf": {
       "name": "@yalumba/vcf",
@@ -308,8 +312,6 @@
 
     "@yalumba/docs": ["@yalumba/docs@workspace:apps/docs"],
 
-    "@yalumba/experiments": ["@yalumba/experiments@workspace:packages/experiments"],
-
     "@yalumba/fastq": ["@yalumba/fastq@workspace:packages/fastq"],
 
     "@yalumba/genome": ["@yalumba/genome@workspace:packages/genome"],
@@ -322,6 +324,8 @@
 
     "@yalumba/math": ["@yalumba/math@workspace:packages/math"],
 
+    "@yalumba/modules": ["@yalumba/modules@workspace:packages/modules"],
+
     "@yalumba/playground": ["@yalumba/playground@workspace:apps/playground"],
 
     "@yalumba/relatedness": ["@yalumba/relatedness@workspace:packages/relatedness"],
@@ -329,6 +333,8 @@
     "@yalumba/runtime": ["@yalumba/runtime@workspace:packages/runtime"],
 
     "@yalumba/spirv": ["@yalumba/spirv@workspace:packages/spirv"],
+
+    "@yalumba/symbiogenesis": ["@yalumba/symbiogenesis@workspace:packages/symbiogenesis"],
 
     "@yalumba/vcf": ["@yalumba/vcf@workspace:packages/vcf"],
 
