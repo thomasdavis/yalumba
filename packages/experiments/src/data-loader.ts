@@ -90,8 +90,40 @@ export const SYNTHETIC_FAMILY: DatasetDef = {
   ],
 };
 
+export const CEPH_1463: DatasetDef = {
+  id: "ceph-1463-6member",
+  name: "CEPH 1463 Pedigree — 6 members, 3 generations (NYGC 30x, 150bp)",
+  dataDir: join(ROOT, "data/ceph-6"),
+  maxReads: 2_000_000,
+  samples: [
+    // Generation 1 — Grandparents
+    { id: "NA12889", role: "Pat. grandfather", file: "NA12889_R1.fastq.gz" },
+    { id: "NA12890", role: "Pat. grandmother", file: "NA12890_R1.fastq.gz" },
+    { id: "NA12891", role: "Mat. grandfather", file: "NA12891_R1.fastq.gz" },
+    { id: "NA12892", role: "Mat. grandmother", file: "NA12892_R1.fastq.gz" },
+    // Generation 2 — Parents
+    { id: "NA12877", role: "Father", file: "NA12877_R1.fastq.gz" },
+    { id: "NA12878", role: "Mother", file: "NA12878_R1.fastq.gz" },
+  ],
+  pairs: [
+    // Unrelated pairs (spouses / in-laws)
+    { a: "NA12877", b: "NA12878", label: "Father ↔ Mother (spouses)", related: false },
+    { a: "NA12889", b: "NA12891", label: "Pat.GF ↔ Mat.GF (unrelated)", related: false },
+    { a: "NA12890", b: "NA12892", label: "Pat.GM ↔ Mat.GM (unrelated)", related: false },
+    { a: "NA12889", b: "NA12892", label: "Pat.GF ↔ Mat.GM (unrelated)", related: false },
+    // Parent-child (G1 → G2, ~50% IBD)
+    { a: "NA12889", b: "NA12877", label: "Pat.GF ↔ Father (parent-child)", related: true },
+    { a: "NA12890", b: "NA12877", label: "Pat.GM ↔ Father (parent-child)", related: true },
+    { a: "NA12891", b: "NA12878", label: "Mat.GF ↔ Mother (parent-child)", related: true },
+    { a: "NA12892", b: "NA12878", label: "Mat.GM ↔ Mother (parent-child)", related: true },
+    // In-law (unrelated — married into family)
+    { a: "NA12889", b: "NA12878", label: "Pat.GF ↔ Mother (in-law)", related: false },
+    { a: "NA12891", b: "NA12877", label: "Mat.GF ↔ Father (in-law)", related: false },
+  ],
+};
+
 /** All available datasets */
-export const ALL_DATASETS: DatasetDef[] = [GIAB_TRIO, SYNTHETIC_FAMILY];
+export const ALL_DATASETS: DatasetDef[] = [GIAB_TRIO, CEPH_1463, SYNTHETIC_FAMILY];
 
 // Legacy exports for backward compatibility
 export const GIAB_SAMPLES = GIAB_TRIO.samples;

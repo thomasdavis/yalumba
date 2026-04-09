@@ -106,9 +106,12 @@ export class BenchmarkRunner {
     const avgUnrelated = unrelatedScores.reduce((s, p) => s + p.score, 0) / Math.max(1, unrelatedScores.length);
     const separation = avgRelated - avgUnrelated;
 
-    const motherSon = pairResults.find((p) => p.label.includes("Mother") || p.label.includes("Child"));
+    // Weakest related pair gap: find the related pair closest to unrelated score
     const unrelated = pairResults.find((p) => !p.related);
-    const motherSonGap = motherSon && unrelated ? motherSon.score - unrelated.score : 0;
+    const weakestRelated = relatedScores.length > 0
+      ? relatedScores.reduce((min, p) => p.score < min.score ? p : min, relatedScores[0]!)
+      : null;
+    const motherSonGap = weakestRelated && unrelated ? weakestRelated.score - unrelated.score : 0;
 
     return {
       name: experiment.name,
