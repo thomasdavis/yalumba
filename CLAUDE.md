@@ -283,8 +283,8 @@ The project follows a research loop:
 1. **Hypothesize** — propose a new algorithm based on biological insight
 2. **Implement** — create a file in `packages/experiments/src/algorithms/` implementing the `Experiment` interface
 3. **Register** — add to `algorithms/index.ts` barrel export and `ALL_EXPERIMENTS` array
-4. **Benchmark** — run `bun run packages/experiments/src/run-giab.ts` against GIAB trio
-5. **Evaluate** — check leaderboard for separation, mother-son gap, timing
+4. **Benchmark** — run `bun run packages/experiments/src/run.ts` (defaults to CEPH 1463 — the hardest dataset)
+5. **Evaluate** — check leaderboard for separation, weakest-pair gap, timing
 6. **Document** — update results page and write a report in `apps/docs/src/app/reports/`
 7. **Deploy** — `cd apps/docs && vercel --prod` to publish to https://yalumba.vercel.app
 
@@ -296,6 +296,7 @@ import type { Experiment, SampleData, ExperimentScore } from "../types.js";
 
 export const myAlgorithm: Experiment = {
   name: "My algorithm",
+  version: 1,  // bump to invalidate cache
   description: "What it does",
   maxReadsPerSample: 100_000,
   compare(a, b) {
