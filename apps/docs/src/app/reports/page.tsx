@@ -3,6 +3,14 @@ import { Section } from "@/components/section";
 
 const reports = [
   {
+    slug: "cross-dataset-2026-04",
+    title: "Cross-Dataset Validation: 29 Algorithms on 3 Datasets (Synthetic, GIAB, CEPH 1463)",
+    date: "April 2026",
+    abstract: "Comprehensive validation across synthetic family, GIAB trio, and 6-member CEPH 1463 pedigree. On the hardest dataset (same-population, 10 pairs), only 2/29 algorithms detect all related pairs. Run-length algorithms dominate on easy datasets but fail when population background sharing confounds. Seed-extend overlap rate is the only algorithm robust across all three datasets. Identifies population baseline subtraction as the key research frontier.",
+    authors: "yalumba project",
+    tags: ["cross-dataset", "CEPH 1463", "population sharing", "robustness", "3 datasets"],
+  },
+  {
     slug: "symbiogenesis-run-length-2026-04",
     title: "Run-Length Symbiogenesis: 29 Algorithms for Reference-Free Relatedness Detection",
     date: "April 2026",
