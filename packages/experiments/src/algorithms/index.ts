@@ -45,6 +45,12 @@ export { seedExtendHybrid } from "./seed-extend-hybrid.js";
 export { populationNormalizedCosine } from "./population-normalized-cosine.js";
 export { haplotypeContinuity } from "./haplotype-continuity.js";
 
+// Feedback-driven algorithms
+export { rareRunFrequencySweep } from "./rare-run-frequency-sweep.js";
+export { adaptiveRarityWeightedRuns } from "./adaptive-rarity-weighted-runs.js";
+export { rareRunP90 } from "./rare-run-p90.js";
+export { rareEcosystemCosine } from "./rare-ecosystem-cosine.js";
+
 import { anchorOverlap } from "./anchor-overlap.js";
 import { normalizedAnchorOverlap } from "./normalized-anchor-overlap.js";
 import { seedExtendOverlapRate } from "./seed-extend-overlap-rate.js";
@@ -80,6 +86,10 @@ import { informationWeightedRuns } from "./information-weighted-runs.js";
 import { seedExtendHybrid } from "./seed-extend-hybrid.js";
 import { populationNormalizedCosine } from "./population-normalized-cosine.js";
 import { haplotypeContinuity } from "./haplotype-continuity.js";
+import { rareRunFrequencySweep } from "./rare-run-frequency-sweep.js";
+import { adaptiveRarityWeightedRuns } from "./adaptive-rarity-weighted-runs.js";
+import { rareRunP90 } from "./rare-run-p90.js";
+import { rareEcosystemCosine } from "./rare-ecosystem-cosine.js";
 
 /** All available experiments, ordered by expected signal strength */
 export const ALL_EXPERIMENTS: Experiment[] = [
@@ -129,4 +139,10 @@ export const ALL_EXPERIMENTS: Experiment[] = [
   seedExtendHybrid,
   populationNormalizedCosine,
   haplotypeContinuity,
+
+  // Feedback-driven algorithms
+  rareRunFrequencySweep,
+  adaptiveRarityWeightedRuns,
+  rareRunP90,
+  rareEcosystemCosine,
 ];
