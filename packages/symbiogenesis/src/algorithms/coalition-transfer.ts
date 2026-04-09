@@ -145,22 +145,21 @@ export const coalitionTransfer: SymbioAlgorithm = {
 
     // ── Score 2: Exclusive pair coalition ratio ──
     // Coalitions shared by ONLY these two samples (presence == 2, both have it)
-    // These are the strongest signal of shared inheritance
+    // Normalized by the SMALLER sample's total informative coalition count
+    // (prevents high-coverage samples from dominating)
     let exclusiveShared = 0;
-    let totalPairRelevant = 0;
+    let sizeA = 0, sizeB = 0;
     for (const fp of ctx.informativeCoalitions) {
       const presence = ctx.coalitionPresence.get(fp) ?? ctx.numSamples;
-      const inA = profA.coalitions.has(fp);
-      const inB = profB.coalitions.has(fp);
-      if (inA || inB) {
-        totalPairRelevant++;
-        if (inA && inB && presence === 2) {
-          exclusiveShared++;
-        }
+      if (profA.coalitions.has(fp)) sizeA++;
+      if (profB.coalitions.has(fp)) sizeB++;
+      if (profA.coalitions.has(fp) && profB.coalitions.has(fp) && presence === 2) {
+        exclusiveShared++;
       }
     }
-    const exclusiveRatio = totalPairRelevant > 0
-      ? exclusiveShared / totalPairRelevant
+    const minSize = Math.min(sizeA, sizeB);
+    const exclusiveRatio = minSize > 0
+      ? exclusiveShared / minSize
       : 0;
 
     // ── Score 3: Coalition frequency correlation ──
@@ -173,33 +172,31 @@ export const coalitionTransfer: SymbioAlgorithm = {
       }
     }
 
+    // ── Score 3: Rarity-weighted frequency cosine ──
+    // Weight each shared coalition's frequency by its IDF rarity
     let freqCorr = 0;
     if (sharedFps.length >= 3) {
-      // Normalize frequencies to proportions within each sample
-      const totalA = sharedFps.reduce((s, fp) => s + (profA.coalitions.get(fp) ?? 0), 0);
-      const totalB = sharedFps.reduce((s, fp) => s + (profB.coalitions.get(fp) ?? 0), 0);
-
-      if (totalA > 0 && totalB > 0) {
-        let dot = 0, normA = 0, normB = 0;
-        for (const fp of sharedFps) {
-          const fa = (profA.coalitions.get(fp) ?? 0) / totalA;
-          const fb = (profB.coalitions.get(fp) ?? 0) / totalB;
-          dot += fa * fb;
-          normA += fa * fa;
-          normB += fb * fb;
-        }
-        const denom = Math.sqrt(normA) * Math.sqrt(normB);
-        freqCorr = denom > 0 ? dot / denom : 0;
+      let dot = 0, normA = 0, normB = 0;
+      for (const fp of sharedFps) {
+        const presence = ctx.coalitionPresence.get(fp) ?? ctx.numSamples;
+        const w = Math.log2(ctx.numSamples / presence); // IDF weight
+        const fa = (profA.coalitions.get(fp) ?? 0) * w;
+        const fb = (profB.coalitions.get(fp) ?? 0) * w;
+        dot += fa * fb;
+        normA += fa * fa;
+        normB += fb * fb;
       }
+      const denom = Math.sqrt(normA) * Math.sqrt(normB);
+      freqCorr = denom > 0 ? dot / denom : 0;
     }
 
     // ── Combined score ──
-    // Best combo: rarity + exclusive + frequency, balanced
-    const score = rarityScore * 0.40 + exclusiveRatio * 0.40 + freqCorr * 0.20;
+    // Exclusive + rarity only (frequency correlation helps in-laws too much)
+    const score = rarityScore * 0.55 + exclusiveRatio * 0.45;
 
     return {
       score,
-      detail: `rarity=${(rarityScore * 100).toFixed(1)}% excl=${exclusiveShared}/${totalPairRelevant} (${(exclusiveRatio * 100).toFixed(2)}%) freqCorr=${freqCorr.toFixed(4)} shared=${sharedFps.length}`,
+      detail: `rarity=${(rarityScore * 100).toFixed(1)}% excl=${exclusiveShared}/${minSize} (${(exclusiveRatio * 100).toFixed(2)}%) freqCorr=${freqCorr.toFixed(4)} shared=${sharedFps.length}`,
     };
   },
 };
