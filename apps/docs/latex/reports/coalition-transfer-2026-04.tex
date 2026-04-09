@@ -1,0 +1,1315 @@
+\documentclass{../yalumba}
+
+\title{Coalition Transfer for\\Reference-Free Relatedness Detection}
+\author{Ajax Davis}
+\date{April 2026}
+
+\setabstract{%
+We present \emph{Coalition Transfer}, a reference-free method for detecting
+biological relatedness directly from raw sequencing reads.  The algorithm
+extends the symbiogenesis family of approaches by shifting the unit of analysis
+from individual k-mer modules to \emph{coalitions}---sets of module identifiers
+that co-occur within a single sequencing read and are fingerprinted as composite
+inheritance units.  Where Module Persistence~v2 tracks which modules appear in
+each sample, Coalition Transfer asks a deeper question: which \emph{combinations}
+of modules travel together through the inheritance process, preserving their
+internal composition across generations?  The method proceeds in four stages:
+(1)~module extraction using 150\,bp windows with a minimum support of~5 and
+cohesion threshold of~0.25, discovering 507--865 modules per sample from a
+shared vocabulary of 3{,}656 unique modules; (2)~coalition profiling, which
+fingerprints each read's module set and tracks coalition frequency and integrity
+across the sample; (3)~informative coalition filtering, retaining 15{,}181 of
+17{,}882 total coalitions that appear in a discriminative subset of samples; and
+(4)~a three-component scoring function combining informative Jaccard overlap
+(weight~0.25), IDF-weighted rarity (weight~0.45), and integrity cosine
+similarity (weight~0.30).  Evaluated on six members of the CEPH~1463
+three-generation pedigree (10~pairwise comparisons), Coalition Transfer achieves
+an average score of~$0.4064$ for parent--child pairs versus~$0.3928$ for
+unrelated and in-law pairs, yielding a mean separation of~$+1.36$ percentage
+points.  However, the weakest gap is~$-0.55$ percentage points: the in-law pair
+Mat.GF~$\leftrightarrow$~Father ($0.4086$) scores above the weakest
+parent--child pair Pat.GM~$\to$~Father ($0.4032$), precluding threshold-based
+classification.  Compared to Module Persistence~v2 ($+4.76\%$ separation,
+1{,}085\,s prep), Coalition Transfer achieves a~$4{\times}$ speedup
+(272\,s total) but lower separation.  Compared to Rare-Run~P90 ($+583\%$
+separation), both symbiogenesis methods remain far behind.  We analyze why the
+integrity component fails to discriminate (all pairs score~1.0), why
+rarity-weighted scoring carries the real signal, and how the persistent in-law
+confound limits all current approaches.  The work establishes coalitions as a
+meaningful unit of genomic analysis while honestly documenting the gap between
+ecological metaphor and practical classification.}
+
+\begin{document}
+\maketitle
+
+\tableofcontents
+\newpage
+
+% ════════════════════════════════════════════════════════════════════
+\section{Introduction}
+\label{sec:intro}
+
+% ── The inheritance unit problem ──
+
+\subsection{The Inheritance Unit Problem}
+
+Biological inheritance operates on blocks of DNA, not individual nucleotides.
+When a parent transmits a chromosome to a child, an entire haplotype
+block---spanning thousands of bases and containing dozens to hundreds of
+variant sites---travels as a single unit.  Classical identity-by-descent (IBD)
+detection exploits this fact by searching for long shared haplotype segments
+between individuals~\cite{browning2012ibd, gusev2009germline}.  The longer the
+shared segment, the more recent the common ancestor, and the closer the
+biological relationship.
+
+\ymarginnote{Inheritance operates on blocks, not individual bases.}
+
+In reference-free genomics, we have no coordinate system, no phased haplotypes,
+and no variant calls.  We operate directly on raw sequencing reads---short
+fragments of 100--300 bases each, drawn from unknown positions across the
+genome.  The challenge is to reconstruct some analogue of ``shared segments''
+from this unordered, unlocalized data.
+
+Our previous work on Module Persistence~\cite{margulis1998} introduced the
+first symbiogenesis algorithm: k-mer modules, defined as connected components
+of co-occurring k-mers within genomic windows, served as the unit of analysis.
+Module sharing between samples provided a meaningful signal for relatedness
+detection, achieving $+4.76\%$ separation between parent--child and unrelated
+pairs on the CEPH~1463 pedigree.  But modules are still relatively fine-grained
+units---each module captures a single cluster of co-occurring k-mers,
+analogous to a single ``species'' in the symbiogenesis metaphor.
+
+\subsection{Coalition Transfer: The Second Symbiogenesis Algorithm}
+
+This report introduces \emph{Coalition Transfer}, the second algorithm in the
+symbiogenesis family.  The key conceptual advance is a shift from individual
+modules to \emph{coalitions}---composite units formed by the set of all modules
+that co-occur within a single sequencing read.
+
+\begin{definition}
+A \textbf{coalition} is the set of module identifiers extracted from a single
+sequencing read.  It represents a composite inheritance unit: a combination of
+k-mer modules that were physically proximate in the donor genome and were
+captured together on a single read fragment.
+\end{definition}
+
+The biological intuition is straightforward.  If a parent transmits a haplotype
+block to a child, and that block spans multiple module boundaries, then the
+\emph{combination} of modules on reads from that block will be conserved in the
+child's data.  A coalition captures exactly this combination.  Two individuals
+who share a coalition share not just individual modules (which might appear
+anywhere in the genome) but a specific \emph{arrangement} of modules that was
+inherited as a unit.
+
+\ymarginnote[yalumba-violet]{Coalitions capture \emph{combinations} of modules, not individual modules.}
+
+The name ``coalition'' is borrowed from ecology and game theory, where it
+describes a temporary alliance of distinct entities that cooperate for mutual
+benefit.  In our context, the ``entities'' are k-mer modules, and the
+``cooperation'' is their physical co-location on inherited DNA.  The coalition
+persists across generations---it is ``transferred'' from parent to child---as
+long as recombination does not break the underlying haplotype block.
+
+\subsection{What Coalition Transfer Addresses}
+
+Module Persistence~v2 achieved meaningful separation on the CEPH~1463 pedigree,
+but several limitations motivated the development of Coalition Transfer:
+
+\begin{enumerate}
+  \item \textbf{Module independence assumption.}  Module Persistence treats each
+        module as an independent feature.  In reality, modules that co-occur on
+        the same read carry joint information that is lost when they are scored
+        independently.
+  \item \textbf{Preparation time.}  Module Persistence required approximately
+        1{,}085 seconds of preparation time (module extraction plus graph
+        construction).  A faster pipeline would enable iterative experimentation
+        and, eventually, clinical use.
+  \item \textbf{Spectral similarity.}  The spectral cosine component in
+        Module Persistence requires eigendecomposition of the module co-occurrence
+        graph, which is computationally expensive and conceptually opaque.
+        Coalition Transfer replaces this with a simpler integrity-based measure.
+  \item \textbf{In-law confound.}  The most persistent failure in all yalumba
+        experiments is the in-law pair Mat.GF~$\leftrightarrow$~Father scoring
+        above some parent--child pairs.  Coalition Transfer explores whether
+        composite units provide additional discriminative power.
+\end{enumerate}
+
+\subsection{Contributions}
+
+This report makes the following contributions:
+
+\begin{enumerate}
+  \item A complete description of the Coalition Transfer algorithm, including
+        module extraction with 150\,bp windows, coalition fingerprinting,
+        coalition profiling, informative filtering, and three-component scoring.
+  \item An evaluation on all 10 pairwise comparisons in the CEPH~1463 pedigree,
+        with full component breakdowns and ranking analysis.
+  \item A direct comparison to Module Persistence~v2 and Rare-Run P90, with
+        honest analysis of where Coalition Transfer improves and where it falls
+        short.
+  \item An analysis of why the integrity component fails to discriminate, why
+        rarity carries the signal, and what this implies for the symbiogenesis
+        research program.
+  \item Detailed computational profiling showing a $4{\times}$ speedup over
+        Module Persistence~v2.
+\end{enumerate}
+
+\subsection{Relationship to Prior Experiments}
+
+Coalition Transfer was developed as the logical successor to Module
+Persistence~v2 (experiment~50 in the yalumba lab notebook).  The module
+extraction phase shares the same algorithmic core but uses different
+parameters (150\,bp windows instead of 100\,bp, higher minimum support).  The
+coalition profiling and scoring phases are entirely new.  All experiments use
+the same six CEPH~1463 samples and the same 10-pair evaluation protocol,
+ensuring strict comparability across the entire experimental trajectory from
+experiment~1 through the present work.
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Background}
+\label{sec:background}
+
+\subsection{Symbiogenesis Theory}
+
+\ymarginnote{Margulis: complexity arises from merger, not mutation.}
+
+Lynn Margulis's theory of symbiogenesis~\cite{margulis1998} proposed that
+the major transitions in biological complexity---the origin of eukaryotic
+cells, the acquisition of mitochondria and chloroplasts---arose not through
+gradual accumulation of point mutations but through the \emph{merger} of
+previously independent organisms into a new, more capable whole.  The
+endosymbiotic origin of mitochondria is now established fact: an
+$\alpha$-proteobacterium was engulfed by an archaeal host cell, and the
+resulting chimera became the ancestor of all eukaryotes.
+
+The symbiogenesis framework provides a powerful metaphor for our algorithmic
+approach.  Just as mitochondria are ``organisms within organisms'' that
+maintain their own genome while contributing to the host, k-mer modules are
+``structures within reads'' that maintain their own identity while contributing
+to the overall relatedness signal.  Coalitions extend the metaphor further:
+they represent the \emph{cellular organization}---the specific arrangement of
+organelles within a cell---that is inherited as a unit across generations.
+
+\subsection{Coalitions in Ecology}
+
+In community ecology, a coalition describes a group of species that co-occur
+more frequently than expected by chance~\cite{bray1957, morisita1959}.
+Coalitions are distinguished from communities by their \emph{compositionality}:
+a coalition is defined not by the presence of any single species but by the
+joint presence of a specific combination.  The classic example is the
+mycorrhizal coalition---a fungus, a host plant, and specific bacterial
+associates---that functions as an integrated unit despite comprising distinct
+organisms.
+
+We adopt this ecological definition directly.  Our coalitions are sets of
+module IDs that co-occur on a single read, and the ``ecosystem'' is the
+genome of an individual.  The transfer of coalitions between parent and child
+mirrors the vertical transmission of symbiotic communities in biology, where
+offspring inherit not just individual symbionts but entire symbiotic
+assemblages.
+
+\subsection{IBD Segments as Genomic Coalitions}
+
+\ymarginnote[yalumba-violet]{IBD segments are, in essence, coalitions of variants.}
+
+Classical IBD segments~\cite{browning2012ibd, browning2013refinedibd} can be
+reinterpreted through the coalition lens.  An IBD segment shared between two
+individuals is a chromosomal region where the combination of alleles is
+identical because both copies descend from a single ancestral chromosome.
+This is precisely a coalition: a set of genetic features (alleles at variant
+sites) that travel together as a unit through the inheritance process.
+
+The difference between classical IBD and our approach is the feature set.
+Classical IBD operates on phased genotypes at known variant positions,
+requiring a reference genome and a variant-calling pipeline.  Our coalitions
+operate on k-mer modules extracted from raw reads, requiring nothing beyond
+the FASTQ files themselves.  The information loss is substantial---we have no
+coordinates, no phasing, and no explicit variant calls---but the
+\emph{conceptual structure} is identical: we are searching for combinations
+of features that are shared because they were inherited together.
+
+\subsection{Why Coalition Integrity Matters}
+
+Not all coalitions are created equal.  A coalition that appears with exactly
+the same module composition every time it is observed carries stronger
+evidence of inheritance than one whose composition varies across reads.
+We formalize this intuition through \emph{coalition integrity}: the fraction
+of observations where the coalition's module set is identical to its canonical
+form.
+
+High-integrity coalitions are likely to represent genuine haplotype blocks
+where the module arrangement is stable across the genome.  Low-integrity
+coalitions may arise from sequencing errors, chimeric reads, or regions where
+module boundaries are ambiguous.  By weighting coalitions by their integrity,
+we aim to up-weight the reliable inheritance signal and down-weight noise.
+
+As we will see in Section~\ref{sec:results}, this intuition does not survive
+contact with real data: all coalitions achieve integrity~1.0 in our current
+implementation, rendering the integrity component non-discriminative.
+Understanding \emph{why} this happens, and how to fix it, is a central
+theme of the Discussion.
+
+\subsection{Reference-Free Approaches}
+
+Several groups have explored reference-free methods for genomic comparison.
+Mash~\cite{ondov2016mash} uses MinHash sketches to estimate Jaccard
+similarity between genomes, providing fast distance estimation for phylogenetic
+placement.  Br\v{i}nda et al.~\cite{brinda2023phylogenetic} demonstrated
+reference-free phylogenetic surveillance using k-mer-based approaches.
+Fan et al.~\cite{fan2021reference} explored alignment-free relatedness
+estimation, though their approach still relied on reference-derived features
+for calibration.
+
+Our work differs from all of these in its focus on \emph{structural}
+features---modules and coalitions---rather than individual k-mer frequencies.
+We hypothesize that the combinatorial structure of inherited DNA carries
+information that is lost when genomes are reduced to bags of independent
+k-mers.  Coalition Transfer is an explicit test of this hypothesis.
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Methods}
+\label{sec:methods}
+
+\subsection{Dataset}
+\label{sec:methods-dataset}
+
+We evaluate on six members of the CEPH~1463 pedigree~\cite{ceph1463},
+a three-generation family that has been extensively studied by the Genome
+in a Bottle (GIAB) consortium~\cite{zook2019giab} and the 1000 Genomes
+Project~\cite{1000genomes2015}.  The six individuals comprise two sets of
+grandparents, the father, and the mother:
+
+\begin{pedigree}
+\begin{verbatim}
+NA12889 + NA12890          NA12891 + NA12892
+(Pat.GF)  (Pat.GM)         (Mat.GF)  (Mat.GM)
+        |                          |
+     NA12877 (Father) ——— NA12878 (Mother)
+\end{verbatim}
+\end{pedigree}
+
+\noindent This pedigree yields 10 distinct pairwise comparisons:
+
+\begin{itemize}
+  \item \textbf{4 parent--child pairs} (marked with $\blacktriangleright$):
+    Pat.GF~$\to$~Father, Pat.GM~$\to$~Father,
+    Mat.GF~$\to$~Mother, Mat.GM~$\to$~Mother.
+  \item \textbf{2 in-law pairs:}
+    Mat.GF~$\leftrightarrow$~Father, Pat.GF~$\leftrightarrow$~Mother.
+  \item \textbf{3 cross-family pairs:}
+    Pat.GF~$\leftrightarrow$~Mat.GF,
+    Pat.GF~$\leftrightarrow$~Mat.GM,
+    Pat.GM~$\leftrightarrow$~Mat.GM.
+  \item \textbf{1 spouse pair:}
+    Father~$\leftrightarrow$~Mother (unrelated).
+\end{itemize}
+
+All samples are whole-genome sequencing at approximately 50$\times$ coverage,
+sequenced on Illumina platforms with paired-end 150\,bp reads.
+
+\subsection{Module Extraction}
+\label{sec:methods-modules}
+
+Module extraction follows the same conceptual pipeline as Module
+Persistence~v2 but with modified parameters optimized for Coalition Transfer:
+
+\begin{enumerate}
+  \item \textbf{K-mer extraction.}  For each read, we extract all canonical
+        15-mers using a Rabin--Karp rolling hash~\cite{karp1987rabin} with
+        base prime~31 and Mersenne prime $2^{61}-1$.  Canonical k-mers are
+        defined as the lexicographically smaller of a k-mer and its reverse
+        complement.
+  \item \textbf{Frequency filtering.}  We retain only k-mers that appear in
+        at least \texttt{minSupport}~$= 5$ reads, removing sequencing errors
+        and ultra-rare variants.
+  \item \textbf{Co-occurrence counting.}  Within a sliding window of
+        \texttt{windowSize}~$= 150$\,bp, we count pairwise co-occurrences of
+        frequent k-mers, accumulating counts in a fixed-size hash table.
+  \item \textbf{Module discovery.}  K-mer pairs with co-occurrence rates
+        exceeding \texttt{minCohesion}~$= 0.25$ (i.e., they appear together in
+        at least 25\% of the windows where either appears) are connected by
+        edges, and modules are defined as connected components of this graph.
+\end{enumerate}
+
+\ymarginnote{150\,bp windows capture the full read length, maximizing co-occurrence signal.}
+
+The key parameter change from Module Persistence~v2 is the window size:
+150\,bp instead of 100\,bp.  This matches the typical Illumina read length,
+ensuring that co-occurrence statistics reflect the full span of each read.
+The larger window increases the number of k-mer pairs considered per window
+but reduces the total number of windows, resulting in faster overall execution.
+
+\begin{definition}
+A \textbf{module} $M$ is a connected component of the k-mer co-occurrence
+graph $G = (V, E)$, where $V$ is the set of frequent k-mers and
+$(u, v) \in E$ if and only if
+$\mathrm{cohesion}(u, v) \geq \texttt{minCohesion}$.
+The cohesion is defined as:
+\begin{equation}
+  \mathrm{cohesion}(u, v) = \frac{\mathrm{cooccur}(u, v)}{\max(\mathrm{freq}(u), \mathrm{freq}(v))}
+  \label{eq:cohesion}
+\end{equation}
+\end{definition}
+
+\subsection{Shared Vocabulary Construction}
+\label{sec:methods-vocabulary}
+
+After modules are extracted independently for each sample, we construct a
+shared vocabulary by assigning canonical identifiers to modules that are
+structurally equivalent across samples.  Two modules are considered equivalent
+if they share a sufficient proportion of their constituent k-mers (measured
+by Jaccard overlap of the k-mer sets).
+
+The shared vocabulary for the CEPH~1463 dataset contains 3{,}656 unique
+modules.  This shared vocabulary serves as the ``alphabet'' for coalition
+construction: only modules present in the shared vocabulary are used to
+define coalitions, ensuring that pairwise comparisons operate over a common
+feature space.
+
+\subsection{Coalition Definition}
+\label{sec:methods-coalition}
+
+\begin{definition}
+Given a sequencing read $r$ and a set of modules $\mathcal{M}$ from the
+shared vocabulary, the \textbf{coalition} of $r$ is the set of module IDs
+whose constituent k-mers appear in $r$:
+\begin{equation}
+  C(r) = \{m \in \mathcal{M} \mid \exists\, \text{k-mer } k \in m \text{ such that } k \in r\}
+  \label{eq:coalition-def}
+\end{equation}
+Two reads have the same coalition if and only if they produce identical
+module-ID sets.
+\end{definition}
+
+Coalition identity is established by fingerprinting: the sorted set of module
+IDs is hashed to produce a single 64-bit identifier.  This allows efficient
+lookup and counting without storing the full module set for each read.
+
+The number of possible coalitions is combinatorial in the vocabulary size
+(up to $2^{3656}$ in theory), but in practice the number of observed
+coalitions is much smaller, bounded by the number of reads in the dataset.
+For our samples, we observe 17{,}882 total distinct coalitions across all
+six individuals.
+
+\subsection{Coalition Profiling}
+\label{sec:methods-profiling}
+
+For each sample, we construct a \emph{coalition profile} that records:
+
+\begin{enumerate}
+  \item \textbf{Coalition frequency:} the number of reads assigned to each
+        coalition fingerprint.
+  \item \textbf{Coalition integrity:} the fraction of reads assigned to a
+        coalition whose module set exactly matches the canonical form.
+\end{enumerate}
+
+The integrity measure is intended to capture how ``clean'' a coalition is.
+A coalition with integrity~1.0 means that every read assigned to it produced
+exactly the same module set, with no partial matches or edge effects.  In our
+current implementation, coalition identity is determined by exact module-set
+match (via fingerprinting), so integrity is mechanically~1.0 for all
+coalitions.  We retain the measure as a placeholder for future refinements
+where approximate matching may produce non-trivial integrity values.
+
+Coalition profiling runs in approximately 1.1 seconds per sample (6.6 seconds
+total for six samples), making it the fastest stage of the pipeline.
+
+\subsection{Informative Coalition Filtering}
+\label{sec:methods-filtering}
+
+Not all coalitions carry relatedness signal.  Coalitions that appear in all
+samples reflect species-wide genomic structure (e.g., conserved regulatory
+regions) rather than inherited variation.  Coalitions that appear in only one
+sample may reflect sequencing artifacts or private mutations that are not
+informative for relatedness.
+
+We define a coalition as \textbf{informative} if it appears in at least~2
+but not all~6 samples.  This is the same filtering criterion used for
+informative modules in Module Persistence~v2, applied at the coalition level.
+Of 17{,}882 total coalitions, 15{,}181 (84.9\%) pass the informativeness
+filter.
+
+\begin{equation}
+  \mathcal{C}_{\mathrm{info}} = \{c \in \mathcal{C} \mid 2 \leq |\{s : c \in s\}| < N\}
+  \label{eq:informative}
+\end{equation}
+
+\noindent where $N = 6$ is the total number of samples.
+
+\subsection{Three-Component Scoring}
+\label{sec:methods-scoring}
+
+The pairwise relatedness score between samples $A$ and $B$ combines three
+components:
+
+\begin{equation}
+  S(A, B) = 0.25 \cdot J_{\mathrm{info}} + 0.45 \cdot R + 0.30 \cdot I_{\cos}
+  \label{eq:score}
+\end{equation}
+
+\subsubsection{Component 1: Informative Jaccard ($J_{\mathrm{info}}$)}
+
+The Jaccard index over informative coalitions shared between two samples:
+
+\begin{equation}
+  J_{\mathrm{info}}(A, B) = \frac{|\mathcal{C}_{\mathrm{info}}^A \cap \mathcal{C}_{\mathrm{info}}^B|}{|\mathcal{C}_{\mathrm{info}}^A \cup \mathcal{C}_{\mathrm{info}}^B|}
+  \label{eq:info-jaccard}
+\end{equation}
+
+This measures the raw overlap in coalition vocabularies, without regard to
+how rare or common each coalition is.  It receives the lowest weight (0.25)
+because, like module-level Jaccard, it is dominated by moderately common
+coalitions that provide limited discriminative power.
+
+\subsubsection{Component 2: IDF-Weighted Rarity Score ($R$)}
+
+To up-weight coalitions that are rare across the sample set, we apply
+inverse document frequency (IDF) weighting~\cite{salton1988tfidf}:
+
+\begin{equation}
+  \mathrm{IDF}(c) = \log\!\left(\frac{N}{|\{s : c \in s\}|}\right)
+  \label{eq:idf}
+\end{equation}
+
+\begin{equation}
+  R(A, B) = \frac{\sum_{c \in \mathcal{C}_{\mathrm{info}}^A \cap \mathcal{C}_{\mathrm{info}}^B} \mathrm{IDF}(c)}{\sum_{c \in \mathcal{C}_{\mathrm{info}}^A \cup \mathcal{C}_{\mathrm{info}}^B} \mathrm{IDF}(c)}
+  \label{eq:rarity}
+\end{equation}
+
+The rarity score receives the highest weight (0.45) based on the hypothesis
+that shared rare coalitions carry stronger evidence of recent common ancestry
+than shared common coalitions.  A coalition that appears in only 2 of 6
+samples and is shared between a parent--child pair provides strong evidence
+that it was inherited, whereas a coalition appearing in 5 of 6 samples is
+likely a common genomic feature.
+
+\subsubsection{Component 3: Integrity Cosine ($I_{\cos}$)}
+
+For coalitions shared between $A$ and $B$, we compute the cosine similarity
+of their integrity vectors:
+
+\begin{equation}
+  I_{\cos}(A, B) = \frac{\mathbf{i}_A \cdot \mathbf{i}_B}{\|\mathbf{i}_A\| \cdot \|\mathbf{i}_B\|}
+  \label{eq:integrity-cosine}
+\end{equation}
+
+\noindent where $\mathbf{i}_A$ and $\mathbf{i}_B$ are vectors of integrity
+values for all shared coalitions.  This component is intended to measure
+whether shared coalitions have similar ``quality'' in both samples.  As noted
+in Section~\ref{sec:methods-profiling}, all integrity values are~1.0 in the
+current implementation, so $I_{\cos} = 1.0$ for all pairs.  The component
+contributes a constant $0.30 \times 1.0 = 0.30$ to every score.
+
+\subsection{Evaluation Metrics}
+\label{sec:methods-eval}
+
+We evaluate the scoring function using two metrics:
+
+\begin{enumerate}
+  \item \textbf{Mean separation:} the difference between the average score
+        of the four parent--child pairs and the average score of the six
+        unrelated/in-law pairs:
+        \begin{equation}
+          \Delta_{\mathrm{avg}} = \overline{S}_{\mathrm{related}} - \overline{S}_{\mathrm{unrelated}}
+          \label{eq:separation}
+        \end{equation}
+  \item \textbf{Weakest gap:} the difference between the lowest-scoring
+        parent--child pair and the highest-scoring unrelated/in-law pair:
+        \begin{equation}
+          \Delta_{\mathrm{weak}} = \min(S_{\mathrm{related}}) - \max(S_{\mathrm{unrelated}})
+          \label{eq:weakest-gap}
+        \end{equation}
+        A negative weakest gap means that at least one unrelated pair scores
+        above at least one parent--child pair, precluding threshold-based
+        classification.
+\end{enumerate}
+
+\subsection{Implementation}
+\label{sec:methods-impl}
+
+The entire pipeline is implemented in TypeScript running on the Bun runtime,
+consistent with the yalumba project's commitment to a vertically integrated
+stack with no external bioinformatics libraries.
+
+Key implementation details:
+
+\begin{itemize}
+  \item \textbf{Hash table:} Co-occurrence counts are stored in a fixed-size
+        hash table of 16{,}777{,}216 entries ($2^{24}$), using open addressing
+        with linear probing.  At peak fill, approximately 11.7 million entries
+        are occupied (70\% load factor).
+  \item \textbf{Memory management:} Module extraction uses typed arrays
+        (\texttt{Uint32Array}, \texttt{Float64Array}) throughout, minimizing
+        garbage collection pressure.  The pipeline achieves approximately 0\,MB
+        heap delta across the full run, indicating efficient allocation and
+        deallocation.
+  \item \textbf{Coalition fingerprinting:} Module ID sets are sorted and
+        hashed using the same Rabin--Karp polynomial hash used for k-mers,
+        producing a 64-bit fingerprint per coalition.
+  \item \textbf{Streaming architecture:} Reads are processed in a single pass
+        per sample.  Module extraction streams through the FASTQ file,
+        coalition profiling operates on the extracted module set, and
+        comparison iterates over the profile dictionaries.
+\end{itemize}
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Results}
+\label{sec:results}
+
+\subsection{Module Extraction Statistics}
+\label{sec:results-modules}
+
+Table~\ref{tab:module-stats} summarizes the module extraction results for
+each of the six CEPH~1463 samples.
+
+\begin{table}[htbp]
+\centering
+\tablestyle
+\caption{Module extraction statistics per sample.  Window size = 150\,bp,
+motif $k$ = 15, minimum support = 5, minimum cohesion = 0.25.}
+\label{tab:module-stats}
+\begin{tabular}{lrrrr}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Sample}} &
+\textcolor{white}{\textbf{Freq.\ motifs}} &
+\textcolor{white}{\textbf{Total motifs}} &
+\textcolor{white}{\textbf{Pair entries}} &
+\textcolor{white}{\textbf{Modules}} \\
+\midrule
+NA12889 (Pat.GF)  & $\sim$215k & $\sim$500k & $\sim$11.7M & 627 \\
+NA12890 (Pat.GM)  & $\sim$173k & $\sim$455k & $\sim$11.7M & 507 \\
+NA12891 (Mat.GF)  & $\sim$232k & $\sim$519k & $\sim$11.7M & 712 \\
+NA12892 (Mat.GM)  & $\sim$259k & $\sim$539k & $\sim$11.7M & 865 \\
+NA12877 (Father)  & $\sim$198k & $\sim$480k & $\sim$11.7M & 589 \\
+NA12878 (Mother)  & $\sim$221k & $\sim$510k & $\sim$11.7M & 695 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The number of discovered modules varies considerably across samples
+(507--865), reflecting differences in coverage depth, read quality, and
+individual genomic complexity.  The pair table consistently fills to
+approximately 11.7 million entries (70\% of the 16M-entry table), indicating
+that the hash table size is well-calibrated for this dataset.
+
+\subsection{Coalition Profile Statistics}
+\label{sec:results-profiles}
+
+Coalition profiling across all six samples yields 17{,}882 total distinct
+coalitions, of which 15{,}181 (84.9\%) are classified as informative (appearing
+in 2--5 samples).  The remaining 2{,}701 coalitions either appear in all six
+samples (universally shared, non-informative) or in only one sample (private,
+non-informative).
+
+The shared vocabulary underlying these coalitions comprises 3{,}656 unique
+modules---the common language of k-mer structures across the pedigree.  The
+fact that $84.9\%$ of coalitions are informative indicates that the coalition
+level of analysis naturally selects for discriminative features: most
+module \emph{combinations} are not universal, even when the individual modules
+might be.
+
+\subsection{Full Score Table}
+\label{sec:results-scores}
+
+Table~\ref{tab:scores} presents the complete results for all 10 pairwise
+comparisons, ranked by composite score.  Parent--child pairs are marked with
+$\blacktriangleright$.
+
+\begin{table}[htbp]
+\centering
+\tablestyle
+\caption{Coalition Transfer scores for all 10 pairwise comparisons in the
+CEPH~1463 pedigree, ranked by composite score $S$.  Components:
+$J_\mathrm{info}$ = informative Jaccard fraction,
+$R$ = IDF-weighted rarity score,
+$I_{\mathrm{cos}}$ = integrity cosine (all 1.0).
+Parent--child pairs marked $\blacktriangleright$.}
+\label{tab:scores}
+\begin{tabular}{clcccc}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Rank}} &
+\textcolor{white}{\textbf{Pair}} &
+\textcolor{white}{\textbf{$J_\mathrm{info}$}} &
+\textcolor{white}{\textbf{$R$}} &
+\textcolor{white}{\textbf{$I_{\mathrm{cos}}$}} &
+\textcolor{white}{\textbf{$S$}} \\
+\midrule
+$\blacktriangleright$ 1 & Pat.GF $\to$ Father     & 25.0\% & 10.7\% & 1.0000 & 0.4107 \\
+2                       & Mat.GF $\leftrightarrow$ Father (in-law)  & 26.0\% & 9.7\% & 1.0000 & 0.4086 \\
+$\blacktriangleright$ 3 & Mat.GM $\to$ Mother      & 24.9\% & 9.7\% & 1.0000 & 0.4061 \\
+$\blacktriangleright$ 4 & Mat.GF $\to$ Mother      & 24.9\% & 9.6\% & 1.0000 & 0.4054 \\
+$\blacktriangleright$ 5 & Pat.GM $\to$ Father      & 24.6\% & 9.2\% & 1.0000 & 0.4032 \\
+6                       & Spouses (unrelated)       & 23.8\% & 8.9\% & 1.0000 & 0.3996 \\
+7                       & Pat.GF $\leftrightarrow$ Mat.GM           & 22.7\% & 9.4\% & 1.0000 & 0.3993 \\
+8                       & Pat.GM $\leftrightarrow$ Mat.GM           & 23.3\% & 8.5\% & 1.0000 & 0.3966 \\
+9                       & Pat.GF $\leftrightarrow$ Mat.GF           & 18.9\% & 7.1\% & 1.0000 & 0.3792 \\
+10                      & Pat.GF $\leftrightarrow$ Mother (in-law)  & 17.5\% & 6.6\% & 1.0000 & 0.3732 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Score Ranking Analysis}
+\label{sec:results-ranking}
+
+The ranking reveals a partially successful separation.  The top-scoring pair
+is the parent--child pair Pat.GF~$\to$~Father ($S = 0.4107$), and three of
+the four parent--child pairs occupy ranks 1, 3, and 4.  However, the in-law
+pair Mat.GF~$\leftrightarrow$~Father ($S = 0.4086$) intrudes at rank~2,
+splitting the parent--child cluster.
+
+The weakest parent--child pair, Pat.GM~$\to$~Father ($S = 0.4032$), sits at
+rank~5---just 0.36 percentage points above the highest-scoring unrelated pair
+(Spouses at $S = 0.3996$).  This narrow margin, combined with the in-law
+intrusion at rank~2, means that no single threshold can perfectly separate
+related from unrelated pairs.
+
+\ymarginnote{Three of four parent--child pairs rank in the top 4, but an in-law intrudes at rank~2.}
+
+Notably, the six unrelated/in-law pairs span a wide range: from 0.3732
+(Pat.GF~$\leftrightarrow$~Mother) to 0.4086 (Mat.GF~$\leftrightarrow$~Father),
+a spread of 3.54 percentage points.  This within-class variance exceeds the
+between-class separation of 1.36 percentage points, confirming that the
+current scoring function cannot support binary classification.
+
+\subsection{Separation Analysis}
+\label{sec:results-separation}
+
+\begin{keyfinding}
+Coalition Transfer achieves a mean separation of $+1.36$ percentage points
+between parent--child pairs (average $S = 0.4064$) and unrelated/in-law pairs
+(average $S = 0.3928$).  The four parent--child pairs score, on average,
+higher than the six unrelated pairs, confirming that the coalition-level
+signal captures some genuine inheritance information.
+\end{keyfinding}
+
+The informative coalition counts for the top-scoring parent--child pair
+(Pat.GF~$\to$~Father) are 2{,}041 shared out of 8{,}152 in the union (25.0\%
+informative Jaccard), with a rarity score of 10.7\%.  The bottom-scoring
+pair (Pat.GF~$\leftrightarrow$~Mother) shares only 1{,}484 informative
+coalitions out of 8{,}492 (17.5\% Jaccard, 6.6\% rarity).  The rarity
+component shows the larger dynamic range: 10.7\% vs.\ 6.6\% (4.1~pp spread)
+compared to 25.0\% vs.\ 17.5\% (7.5~pp spread) for Jaccard.  However, the
+rarity component receives a higher weight (0.45 vs.\ 0.25), amplifying its
+contribution to the final score.
+
+\subsection{Weakest Gap Failure}
+\label{sec:results-gap}
+
+\begin{limitation}
+The weakest gap is $-0.55$ percentage points: the in-law pair
+Mat.GF~$\leftrightarrow$~Father ($S = 0.4086$) scores above the weakest
+parent--child pair Pat.GM~$\to$~Father ($S = 0.4032$).  This means Coalition
+Transfer \textbf{cannot} separate all related pairs from all unrelated pairs
+using a single threshold.
+\end{limitation}
+
+The problematic in-law pair, Mat.GF~$\leftrightarrow$~Father, has an
+informative Jaccard of 26.0\%---actually the highest of any pair in the
+dataset.  Its rarity score of 9.7\% exceeds that of two parent--child pairs
+(Mat.GF~$\to$~Mother at 9.6\% and Pat.GM~$\to$~Father at 9.2\%).  This
+in-law pair shares 1{,}952 informative coalitions out of 7{,}515 in the
+union---a substantial overlap that is not explained by direct inheritance.
+
+The persistence of this confound across all yalumba experiments (raw Jaccard,
+frequency filtering, run-length scoring, Module Persistence, and now Coalition
+Transfer) suggests that Mat.GF and Father share an unusual amount of genomic
+structure that is not attributable to their relationship through Mother.
+Possible explanations include shared population background (both are of
+European ancestry from the Utah CEPH collection), cryptic distant relatedness,
+or systematic sequencing artifacts that create spurious module overlap.
+
+\subsection{Component Contribution Analysis}
+\label{sec:results-components}
+
+Since the integrity cosine is uniformly~1.0, the effective scoring function
+reduces to a two-component formula:
+
+\begin{equation}
+  S_{\mathrm{eff}}(A, B) = 0.25 \cdot J_{\mathrm{info}} + 0.45 \cdot R + 0.30
+  \label{eq:effective-score}
+\end{equation}
+
+The constant $0.30$ term from integrity contributes equally to all pairs and
+has no discriminative power.  All separation is driven by the Jaccard and
+rarity components, with rarity receiving $1.8{\times}$ the weight of Jaccard.
+
+To understand which component drives the separation, we can decompose the
+mean separation:
+
+\begin{itemize}
+  \item \textbf{Jaccard contribution:}
+    $\overline{J}_{\mathrm{related}} - \overline{J}_{\mathrm{unrelated}}
+    \approx 24.85\% - 22.03\% = +2.82\,\mathrm{pp}$,
+    weighted: $0.25 \times 2.82 = +0.71\,\mathrm{pp}$.
+  \item \textbf{Rarity contribution:}
+    $\overline{R}_{\mathrm{related}} - \overline{R}_{\mathrm{unrelated}}
+    \approx 9.80\% - 8.37\% = +1.43\,\mathrm{pp}$,
+    weighted: $0.45 \times 1.43 = +0.64\,\mathrm{pp}$.
+  \item \textbf{Integrity contribution:}
+    $1.0 - 1.0 = 0.00$, weighted: $0.30 \times 0.00 = 0.00\,\mathrm{pp}$.
+\end{itemize}
+
+The Jaccard and rarity components contribute approximately equally to the
+total separation ($+0.71$ vs.\ $+0.64$ pp), despite rarity having a higher
+weight.  This suggests that the IDF weighting is not providing as much
+additional discriminative power as hoped---the rarity signal is compressed
+relative to the raw Jaccard signal.
+
+\subsection{Comparison to Module Persistence v2}
+\label{sec:results-mpg}
+
+Table~\ref{tab:comparison-mpg} compares Coalition Transfer to Module
+Persistence~v2 on the same dataset and evaluation protocol.
+
+\begin{table}[htbp]
+\centering
+\tablestyle
+\caption{Comparison of Coalition Transfer and Module Persistence~v2.}
+\label{tab:comparison-mpg}
+\begin{tabular}{lcc}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Metric}} &
+\textcolor{white}{\textbf{Coalition Transfer}} &
+\textcolor{white}{\textbf{Module Persistence v2}} \\
+\midrule
+Mean separation        & $+1.36\%$  & $+4.76\%$ \\
+Weakest gap            & $-0.55\%$  & $-3.17\%$ \\
+Prep time (total)      & 272\,s     & 1{,}085\,s \\
+Prep time (per sample) & $\sim$44\,s & $\sim$180\,s \\
+Comparison time        & $<0.01$\,s  & $<0.01$\,s \\
+Heap delta             & $\sim$0\,MB & $\sim$4{,}806\,MB \\
+Unit of analysis       & Coalition   & Module \\
+Components             & 3 (J, R, I) & 3 ($J_M$, $J_E$, $\cos$) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Coalition Transfer achieves a $4{\times}$ speedup in preparation time and
+dramatically lower memory usage, but at the cost of reduced separation:
+$+1.36\%$ vs.\ $+4.76\%$, a factor of $3.5{\times}$ worse.  The weakest
+gap, however, is actually less negative ($-0.55\%$ vs.\ $-3.17\%$),
+suggesting that Coalition Transfer produces a tighter score distribution
+overall---the reduced separation comes from compressing both the related
+and unrelated score ranges.
+
+\begin{keyfinding}
+Coalition Transfer is $4{\times}$ faster than Module Persistence~v2 and uses
+negligible additional memory, but achieves $3.5{\times}$ lower mean
+separation.  The weakest gap is less negative ($-0.55\%$ vs.\ $-3.17\%$),
+indicating a more compressed but more uniform score distribution.
+\end{keyfinding}
+
+\subsection{Comparison to Rare-Run P90 Baseline}
+\label{sec:results-rarerun}
+
+Table~\ref{tab:comparison-rarerun} compares Coalition Transfer to the
+Rare-Run P90 baseline (experiment~38), which remains the strongest
+performer in the yalumba experiment history.
+
+\begin{table}[htbp]
+\centering
+\tablestyle
+\caption{Comparison of Coalition Transfer and Rare-Run P90.}
+\label{tab:comparison-rarerun}
+\begin{tabular}{lcc}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Metric}} &
+\textcolor{white}{\textbf{Coalition Transfer}} &
+\textcolor{white}{\textbf{Rare-Run P90}} \\
+\midrule
+Mean separation        & $+1.36\%$   & $+583\%$ \\
+Weakest gap            & $-0.55\%$   & $+300\%$ \\
+Prep time              & 272\,s      & 72.5\,s \\
+Unit of analysis       & Coalition   & Run of rare k-mers \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The performance gap between Coalition Transfer and Rare-Run P90 is enormous:
+$+583\%$ vs.\ $+1.36\%$ mean separation, and $+300\%$ vs.\ $-0.55\%$ weakest
+gap.  Rare-Run P90 achieves complete separation (positive weakest gap) in
+less time.  This comparison underscores a persistent finding across the
+symbiogenesis algorithms: the module/coalition abstraction layer does not
+yet capture the discriminative signal as effectively as direct rare k-mer
+run detection.
+
+\subsection{Timing and Memory Breakdown}
+\label{sec:results-timing}
+
+Table~\ref{tab:timing} provides a detailed breakdown of execution time by
+pipeline stage.
+
+\begin{table}[htbp]
+\centering
+\tablestyle
+\caption{Execution time breakdown for Coalition Transfer on the CEPH~1463
+dataset (6 samples, 10 pairs).}
+\label{tab:timing}
+\begin{tabular}{lrr}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Stage}} &
+\textcolor{white}{\textbf{Total time}} &
+\textcolor{white}{\textbf{Per sample/pair}} \\
+\midrule
+Data loading          & 24.0\,s   & 4.0\,s per sample \\
+Module extraction     & 265.0\,s  & $\sim$44\,s per sample \\
+Coalition profiling   & 6.6\,s    & $\sim$1.1\,s per sample \\
+Pairwise comparison   & $<0.1$\,s & $<0.01$\,s per pair \\
+\midrule
+\textbf{Total}        & \textbf{272.1\,s} & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Module extraction dominates the runtime at 97.4\% of total time.  This is
+expected: module extraction involves streaming through every read in every
+FASTQ file, extracting k-mers, counting co-occurrences, and building the
+module graph.  Coalition profiling, by contrast, operates on the already-extracted
+module assignments and is effectively a counting operation.  Pairwise comparison
+is instantaneous because it operates on pre-computed coalition profiles.
+
+The heap delta of approximately 0\,MB indicates that the pipeline's memory
+management is effective: allocations during module extraction are released
+before coalition profiling begins, and the profiling stage uses compact
+data structures (hash maps of coalition fingerprints to counts).
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Discussion}
+\label{sec:discussion}
+
+\subsection{What Coalition Transfer Captures}
+\label{sec:discussion-captures}
+
+Coalition Transfer captures a genuinely different signal than Module
+Persistence.  Where Module Persistence asks ``which modules are present?'',
+Coalition Transfer asks ``which \emph{combinations} of modules are present?''.
+This is a strictly higher-order question: two samples can share identical
+module inventories but have completely different coalition profiles, if the
+modules co-occur in different arrangements across reads.
+
+The positive mean separation ($+1.36\%$) confirms that coalition-level
+sharing is correlated with biological relatedness.  Parent--child pairs share
+more informative coalitions, and the shared coalitions are rarer on average,
+than those shared by unrelated pairs.  This is consistent with the inheritance
+model: a child inherits specific haplotype blocks from each parent, and the
+module combinations within those blocks are transferred as units.
+
+However, the magnitude of the signal is disappointing.  The $+1.36\%$
+separation is substantially lower than the $+4.76\%$ achieved by Module
+Persistence~v2, which operates at a coarser level of analysis (individual
+modules rather than module combinations).  This suggests that the additional
+combinatorial specificity of coalitions introduces noise faster than it
+introduces signal.
+
+\subsection{Why 150\,bp Windows Improve Prep Time but Not Separation}
+\label{sec:discussion-windows}
+
+The switch from 100\,bp to 150\,bp windows was motivated by two goals:
+matching the window size to the read length (maximizing co-occurrence
+signal per window) and reducing the total number of windows (improving
+execution speed).
+
+\ymarginnote{Larger windows trade resolution for speed.}
+
+The speed improvement is substantial: $\sim$44\,s per sample vs.\
+$\sim$180\,s, a $4{\times}$ speedup.  But the separation does not improve.
+This apparent paradox is explained by the relationship between window size
+and module resolution.
+
+With a 150\,bp window, more k-mer pairs fall within the same window, and
+more pairs exceed the cohesion threshold.  This produces larger, more
+connected modules---fewer modules with more k-mers each.  The modules are
+coarser-grained, capturing broader genomic regions but losing the fine
+structure that distinguishes related from unrelated sharing.  At the
+coalition level, coarser modules mean that coalitions become less specific:
+a coalition containing a large, generic module is less informative than one
+containing several small, specific modules.
+
+The implication is that window size creates a trade-off between computational
+efficiency and signal resolution.  The optimal window size for Coalition
+Transfer may be smaller than 150\,bp, at the cost of longer extraction time.
+
+\subsection{The Integrity Measurement Problem}
+\label{sec:discussion-integrity}
+
+The most striking failure in Coalition Transfer is the integrity component.
+All coalitions achieve integrity~1.0 for all samples, rendering the integrity
+cosine a constant and eliminating 30\% of the scoring function's potential
+discriminative power.
+
+This is a \emph{measurement artifact}, not a biological finding.  In the
+current implementation, coalition identity is determined by exact module-set
+match via fingerprinting.  Two reads that differ by even a single module
+produce different fingerprints and are assigned to different coalitions.
+Consequently, every observation of a given coalition fingerprint has, by
+construction, exactly the same module set---integrity is mechanically~1.0.
+
+\begin{limitation}
+The integrity component is non-discriminative because coalition identity is
+defined by exact fingerprint matching.  Any variation in module composition
+creates a new coalition rather than reducing the integrity of an existing one.
+This wastes 30\% of the scoring function's weight on a constant.
+\end{limitation}
+
+To make integrity meaningful, the implementation would need to support
+\emph{approximate coalition matching}: grouping reads whose module sets are
+similar but not identical, and measuring what fraction of each coalition's
+reads match its canonical form exactly.  This could be achieved through
+locality-sensitive hashing (LSH) of module sets, hierarchical clustering
+of coalitions, or a Hamming-distance threshold on fingerprints.
+
+\subsection{Rarity-Weighted Scoring as the Real Signal Carrier}
+\label{sec:discussion-rarity}
+
+With integrity contributing nothing, the effective scoring function is:
+
+\[
+  S_{\mathrm{eff}} = 0.25 \cdot J_{\mathrm{info}} + 0.45 \cdot R + 0.30
+\]
+
+The rarity component ($R$) carries 63.4\% of the non-constant weight
+($0.45 / (0.25 + 0.45) = 0.643$), making it the dominant signal.  This is
+consistent with the broader finding across yalumba experiments that
+\emph{rarity is the most informative feature for relatedness detection}.
+
+The IDF-weighted rarity score amplifies the contribution of coalitions that
+appear in few samples.  A coalition shared between only a parent--child pair
+and no other individuals receives a high IDF weight, contributing strongly
+to their pairwise score.  A coalition shared by five of six samples receives
+a low IDF weight, contributing weakly regardless of which pair is being
+compared.
+
+The connection to information theory is direct: rare events carry more
+information~\cite{li2004ncd}.  In the genomic context, a rare coalition is
+one that is unlikely to appear by chance in unrelated individuals, so its
+shared presence between two individuals is strong evidence of shared ancestry.
+This principle is the same one that makes rare variant sharing a powerful
+signal in classical IBD detection~\cite{browning2012ibd}.
+
+\subsection{The In-Law Confound Persists}
+\label{sec:discussion-inlaw}
+
+The in-law pair Mat.GF~$\leftrightarrow$~Father has confounded every yalumba
+experiment since experiment~1.  In Coalition Transfer, this pair scores
+$0.4086$---higher than two of four parent--child pairs.  Its informative
+Jaccard of 26.0\% is the highest of any pair, suggesting that Mat.GF and
+Father share an unusually large number of coalition types.
+
+Several hypotheses could explain this persistent confound:
+
+\begin{enumerate}
+  \item \textbf{Shared European ancestry.}  The CEPH collection was drawn
+        from Utah families of primarily northern European descent.  Mat.GF
+        and Father may share population-level haplotype blocks that create
+        genuine coalition overlap without recent common ancestry.
+  \item \textbf{Assortative mating.}  If Mother was drawn to a partner with
+        similar genomic background to her father, Mat.GF and Father would
+        share more genomic structure than expected by chance.
+  \item \textbf{Coverage artifacts.}  Differences in sequencing depth between
+        samples can inflate or deflate module counts, creating spurious
+        overlap between samples with similar coverage profiles.
+  \item \textbf{Cryptic relatedness.}  Mat.GF and Father may be distantly
+        related through ancestors not captured in the pedigree.
+\end{enumerate}
+
+None of these hypotheses can be tested with the current dataset alone.
+Resolving the in-law confound likely requires either a larger pedigree (where
+the effect can be assessed statistically) or integration with variant-level
+information (to distinguish population-level sharing from IBD).
+
+\subsection{Coalition vs.\ Module: Which Unit Is More Informative?}
+\label{sec:discussion-unit}
+
+The direct comparison between Coalition Transfer ($+1.36\%$ separation) and
+Module Persistence~v2 ($+4.76\%$ separation) strongly favors the module as
+the unit of analysis.  This is a surprising finding: we hypothesized that
+coalitions, as higher-order structures, would capture more inheritance
+information than individual modules.
+
+The explanation likely lies in the \emph{specificity--sensitivity trade-off}.
+Coalitions are highly specific: two individuals must share exactly the same
+combination of modules (as determined by fingerprinting) for a coalition match
+to count.  This specificity means that many genuine inheritance events are
+missed because the inherited haplotype block spans slightly different module
+boundaries in the two samples, producing different coalitions despite
+substantial overlap.
+
+Modules, by contrast, are less specific but more sensitive.  Two individuals
+who share a haplotype block will share most of the individual modules within
+that block, even if the block boundaries differ slightly.  Module-level
+analysis tolerates boundary variation in a way that coalition-level analysis
+does not.
+
+\ymarginnote{Coalitions are too specific---exact module-set matching misses genuine inheritance.}
+
+This analysis suggests a potential improvement: \emph{fuzzy coalition
+matching}, where two coalitions are considered equivalent if their module sets
+overlap above some threshold (e.g., Jaccard $> 0.8$) rather than requiring
+exact identity.  This would reduce specificity while maintaining the
+compositional structure that makes coalitions conceptually appealing.
+
+\subsection{Connection to Classical Haplotype Block Theory}
+\label{sec:discussion-haplotype}
+
+Haplotype blocks~\cite{ebert2021haplotype} are regions of the genome where
+linkage disequilibrium is high and recombination is rare.  Within a haplotype
+block, the set of alleles at variant sites is highly correlated, and blocks
+are inherited as units across generations.
+
+Our coalitions are, in a sense, reference-free approximations of haplotype
+blocks.  A coalition represents a set of k-mer modules that co-occur on a
+single read, which (if the read spans a haplotype block) captures the allelic
+composition of that block.  The key difference is resolution: a haplotype
+block may span thousands of bases, while a sequencing read spans only
+$\sim$150\,bp.  Our coalitions capture only the local module structure within
+a single read, not the full extent of a haplotype block.
+
+This resolution limitation is fundamental to short-read reference-free
+analysis.  Long-read sequencing (PacBio HiFi, Oxford Nanopore) would produce
+reads spanning multiple kilobases, potentially capturing entire haplotype
+blocks within single reads.  Coalition Transfer on long-read data could yield
+dramatically improved results, as each coalition would represent a much larger
+and more informative genomic unit.
+
+\subsection{The Symbiogenesis Contribution: Is Coalition Transfer Genuinely Different?}
+\label{sec:discussion-symbiogenesis}
+
+A critical question is whether the symbiogenesis framing---modules as organisms,
+coalitions as symbiotic communities---provides genuine algorithmic insight or is
+merely an evocative metaphor.
+
+The honest answer is mixed.  On one hand, the symbiogenesis framing motivated
+the development of Coalition Transfer: the idea that ``organisms cooperate in
+coalitions'' led directly to the idea that ``modules cooperate in read-level
+combinations''.  On the other hand, the algorithm itself is a straightforward
+application of standard techniques: co-occurrence counting, connected-component
+discovery, set intersection, and IDF weighting.  None of these require the
+symbiogenesis metaphor; they could have been derived from first principles in
+information retrieval or combinatorics.
+
+The metaphor's value may lie more in \emph{direction} than in \emph{mechanism}.
+It suggests specific research directions---boundary conservation, ecological
+succession of coalitions across generations, niche differentiation of module
+types---that might not arise from a purely information-theoretic framing.
+Whether these directions yield practical improvements remains to be seen.
+
+\subsection{Computational Advantages}
+\label{sec:discussion-computation}
+
+Coalition Transfer's most unambiguous advantage over Module Persistence~v2 is
+computational efficiency.  At 272 seconds total (44 seconds per sample),
+Coalition Transfer is $4{\times}$ faster than Module Persistence~v2 (1{,}085
+seconds, 180 seconds per sample).  The memory improvement is even more dramatic:
+approximately 0\,MB heap delta versus 4{,}806\,MB for Module Persistence~v2.
+
+The speed advantage comes from three sources:
+
+\begin{enumerate}
+  \item \textbf{Larger windows} reduce the number of co-occurrence updates
+        during module extraction.
+  \item \textbf{No graph eigendecomposition.}  Module Persistence~v2 computes
+        spectral features of the module co-occurrence graph, which requires
+        matrix operations.  Coalition Transfer replaces this with the simpler
+        integrity cosine.
+  \item \textbf{Efficient profiling.}  Coalition profiling is a single-pass
+        counting operation over pre-extracted module assignments, requiring
+        only a hash map from fingerprints to counts.
+\end{enumerate}
+
+The memory advantage arises because Coalition Transfer does not need to
+materialize the full module co-occurrence graph.  Module Persistence~v2 builds
+a dense adjacency matrix for spectral analysis; Coalition Transfer discards
+the graph after connected-component extraction and operates on the much more
+compact coalition profiles.
+
+For practical deployment---especially in resource-constrained environments or
+on consumer hardware---this efficiency advantage is significant.  A 4.5-minute
+pipeline that uses negligible memory is feasible on a laptop; an 18-minute
+pipeline requiring 5\,GB of RAM is not.
+
+\subsection{Limitations}
+\label{sec:discussion-limitations}
+
+Coalition Transfer has several significant limitations:
+
+\begin{enumerate}
+  \item \textbf{Negative weakest gap.}  The in-law pair
+        Mat.GF~$\leftrightarrow$~Father scores above the weakest parent--child
+        pair, precluding threshold-based classification.  This is the most
+        critical limitation for any practical application.
+
+  \item \textbf{Non-discriminative integrity.}  The integrity cosine contributes
+        nothing to separation because all values are mechanically~1.0.  This
+        wastes 30\% of the scoring function's capacity.
+
+  \item \textbf{Exact coalition matching.}  The fingerprinting approach requires
+        exact module-set identity for a coalition match.  Any variation in
+        module composition creates a new coalition, reducing sensitivity to
+        genuine inheritance events where boundary effects alter the module set.
+
+  \item \textbf{Short-read limitation.}  With 150\,bp reads, each coalition
+        captures only a small genomic window.  The combinatorial richness of
+        coalitions is limited by the physical read length, which constrains
+        the number of modules that can co-occur on a single read.
+
+  \item \textbf{Single pedigree evaluation.}  All results are from a single
+        six-member pedigree.  The method's performance on larger pedigrees,
+        different populations, or more distant relationships is unknown.
+
+  \item \textbf{Coverage sensitivity.}  The number of discovered modules
+        varies 1.7-fold across samples (507--865), suggesting that coverage
+        differences influence module extraction.  This variation propagates
+        to the coalition level and may bias pairwise comparisons.
+
+  \item \textbf{No population-level calibration.}  Unlike classical IBD
+        methods that calibrate against a population panel, Coalition Transfer
+        has no mechanism to distinguish population-level sharing from
+        family-level sharing.
+
+  \item \textbf{Parameter sensitivity.}  The method uses several parameters
+        (window size, motif $k$, minimum support, minimum cohesion, scoring
+        weights) that were chosen by experimentation rather than principled
+        optimization.  Different parameter settings may yield substantially
+        different results.
+\end{enumerate}
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Future Work}
+\label{sec:future}
+
+The Coalition Transfer results suggest several promising research directions.
+
+\subsection{Boundary Conservation Analysis}
+
+The most immediate improvement would be measuring how coalition boundaries
+are conserved across related individuals.  If a parent and child share a
+haplotype block, the coalition boundaries at the edges of that block should
+be similar (but not necessarily identical) in both samples.  A
+\emph{boundary conservation score} could provide a fourth scoring component
+that captures information currently lost by exact fingerprint matching.
+
+\subsection{Ecological Role Assignment}
+
+In ecology, species within a coalition play different roles: keystone species,
+facilitators, competitors~\cite{bray1957}.  We could assign analogous roles
+to modules within a coalition---e.g., a ``core module'' that appears in every
+instance of the coalition vs.\ a ``peripheral module'' that appears only in
+some instances.  This role structure could provide additional discriminative
+features for relatedness scoring.
+
+\subsection{Graph Diffusion over Coalition Networks}
+
+Rather than comparing coalition profiles directly, we could construct a
+\emph{coalition graph} where nodes are coalitions and edges connect
+coalitions that share modules.  Random-walk-based similarity on this graph
+(e.g., personalized PageRank) could capture higher-order relationships
+between coalition profiles that are invisible to direct comparison.
+
+\subsection{Multi-Resolution Coalition Analysis}
+
+Currently, all coalitions are extracted at a single read length ($\sim$150\,bp).
+A multi-resolution approach would extract coalitions at multiple window sizes
+(50\,bp, 100\,bp, 150\,bp, 300\,bp) and combine the signals.  Smaller windows
+would capture fine-grained local structure; larger windows (via paired-end
+information or read merging) would capture broader haplotype blocks.
+
+\subsection{GPU Acceleration}
+
+The module extraction stage (97.4\% of total runtime) is embarrassingly
+parallel: each read can be processed independently, and co-occurrence
+counting can be parallelized across windows.  The yalumba GPU pipeline
+(TypeScript DSL $\to$ C codegen $\to$ SPIR-V $\to$ GPU dispatch) is designed
+for exactly this kind of workload.  A GPU-accelerated module extraction
+kernel could reduce the 265-second extraction phase to seconds, making
+interactive experimentation feasible.
+
+\subsection{Approximate Coalition Matching}
+
+Replacing exact fingerprint matching with locality-sensitive hashing (LSH)
+would allow fuzzy coalition comparison.  Two coalitions with Jaccard overlap
+$> 0.8$ of their module sets could be treated as variants of the same
+underlying haplotype structure.  This would address the fundamental
+specificity problem identified in Section~\ref{sec:discussion-unit} and
+potentially recover much of the signal lost to boundary effects.
+
+\subsection{Long-Read Validation}
+
+Testing Coalition Transfer on PacBio HiFi or Oxford Nanopore reads
+(10{,}000--20{,}000\,bp) would dramatically increase the number of modules
+per coalition and the specificity of each coalition fingerprint.  Long reads
+could capture entire haplotype blocks, making coalitions a direct analogue
+of IBD segments rather than a crude approximation.
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Conclusion}
+\label{sec:conclusion}
+
+Coalition Transfer is the second algorithm in the yalumba symbiogenesis family,
+extending Module Persistence by shifting the unit of analysis from individual
+k-mer modules to composite coalitions---sets of modules that co-occur on single
+sequencing reads.  The method is motivated by a biologically grounded intuition:
+inherited DNA transmits not just individual genomic features but specific
+\emph{combinations} of features, and these combinations should be more
+informative than their individual components.
+
+Evaluated on the CEPH~1463 pedigree (6 members, 10 pairwise comparisons),
+Coalition Transfer achieves a mean separation of $+1.36\%$ between
+parent--child and unrelated/in-law pairs, with a weakest gap of $-0.55\%$.
+These results confirm that coalition-level sharing is correlated with
+biological relatedness but fail to achieve the separation needed for
+threshold-based classification.  The in-law confound
+(Mat.GF~$\leftrightarrow$~Father scoring above Pat.GM~$\to$~Father) persists
+from all previous experiments.
+
+The algorithm's computational profile is favorable: 272 seconds total
+($4{\times}$ faster than Module Persistence~v2) with negligible memory
+overhead.  However, this speed advantage comes at the cost of reduced
+separation ($+1.36\%$ vs.\ $+4.76\%$), and both symbiogenesis methods remain
+far behind the Rare-Run P90 baseline ($+583\%$).
+
+Three specific findings inform future development:
+
+\begin{enumerate}
+  \item \textbf{Integrity is non-discriminative} because exact fingerprint
+        matching mechanically produces integrity~1.0.  Approximate coalition
+        matching is needed to make this component meaningful.
+  \item \textbf{Coalitions are too specific.}  Exact module-set matching
+        misses genuine inheritance events where boundary effects alter the
+        coalition composition.  Fuzzy matching (via LSH or Hamming thresholds)
+        could recover lost signal.
+  \item \textbf{Rarity remains the dominant signal.}  Across all yalumba
+        experiments, rare features---whether k-mers, modules, or
+        coalitions---provide the strongest discriminative power for relatedness
+        detection.  Future algorithms should prioritize rarity-aware scoring.
+\end{enumerate}
+
+The work establishes coalitions as a meaningful unit of reference-free
+genomic analysis, documents their current limitations honestly, and
+identifies specific algorithmic improvements that could close the gap
+with simpler but more effective baselines.  The symbiogenesis research
+program continues: the metaphor of biological merger provides direction,
+even when the current instantiation falls short of its promise.
+
+
+% ════════════════════════════════════════════════════════════════════
+\section*{References}
+\label{sec:references}
+
+\begingroup
+\renewcommand{\section}[2]{}%
+\bibliographystyle{unsrt}
+\bibliography{../references}
+\endgroup
+
+\end{document}

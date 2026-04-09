@@ -3,6 +3,14 @@ import { Section } from "@/components/section";
 
 const reports = [
   {
+    slug: "coalition-transfer-2026-04",
+    title: "Coalition Transfer: Composite Inheritance Units for Reference-Free Relatedness Detection",
+    date: "April 2026",
+    abstract: "Second symbiogenesis-native algorithm using module coalitions — sets of co-occurring modules within reads — as the primary unit of analysis. 150bp windows yield 3656 shared modules and 15,181 informative coalitions. Separation +1.36% with rarity-weighted scoring as the strongest signal carrier. 4x faster prep than Module Persistence (272s vs 1085s) but weaker separation.",
+    authors: "yalumba project",
+    tags: ["coalition transfer", "symbiogenesis", "composite inheritance", "CEPH 1463"],
+  },
+  {
     slug: "module-persistence-2026-04",
     title: "Module Persistence Graphs: First Symbiogenesis-Native Algorithm for Reference-Free Relatedness Detection",
     date: "April 2026",
