@@ -61,12 +61,10 @@ cd apps/docs/latex && tectonic reports/[slug].tex -o ../public/reports/
 Update `apps/docs/src/app/reports/page.tsx` with the new report.
 Add `slug` prop to the report's TSX page for the download button.
 
-## 6. Build, commit, push, deploy
+## 6. Commit and push (no Vercel deploy needed)
 ```bash
-cd apps/docs && bun run build
-cd ../.. && git add -A && git commit -m "feat: [algorithm] experiment + 30-page LaTeX paper"
+git add -A && git commit -m "feat: [algorithm] experiment + 30-page LaTeX paper"
 git push
-cd apps/docs && vercel --prod
 ```
 
 ## 7. Report back to user

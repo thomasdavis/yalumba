@@ -254,7 +254,7 @@ The Next.js tutorial app at `apps/docs` is a living lab notebook that documents 
 
 ### Deployment
 
-The docs app is deployed to **Vercel on the `thomasdavis` account**. Push to main triggers automatic deployment.
+The docs app was previously deployed to Vercel. **Do not worry about deploying to Vercel** — just push to git. PDFs are served from `apps/docs/public/reports/` and can be viewed locally.
 
 ```bash
 # Local development
