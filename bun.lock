@@ -77,6 +77,13 @@
       "name": "@yalumba/compression",
       "version": "0.0.1",
     },
+    "packages/compute": {
+      "name": "@yalumba/compute",
+      "version": "0.0.1",
+      "dependencies": {
+        "@yalumba/math": "workspace:*",
+      },
+    },
     "packages/experiments": {
       "name": "@yalumba/experiments",
       "version": "0.0.1",
@@ -295,6 +302,8 @@
     "@yalumba/cli": ["@yalumba/cli@workspace:apps/cli"],
 
     "@yalumba/compression": ["@yalumba/compression@workspace:packages/compression"],
+
+    "@yalumba/compute": ["@yalumba/compute@workspace:packages/compute"],
 
     "@yalumba/docs": ["@yalumba/docs@workspace:apps/docs"],
 

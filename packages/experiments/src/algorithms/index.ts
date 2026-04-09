@@ -58,6 +58,14 @@ export { cargoTransferScore } from "./cargo-transfer-score.js";
 export { moduleCopyNumber } from "./module-copy-number.js";
 export { breakpointHomology } from "./breakpoint-homology.js";
 
+// Rare-run family strengthening algorithms
+export { runEntropy } from "./run-entropy.js";
+export { rareRunMass } from "./rare-run-mass.js";
+export { multiKRareRuns } from "./multi-k-rare-runs.js";
+export { relatednessEstimator } from "./relatedness-estimator.js";
+export { layerIsolation } from "./layer-isolation.js";
+export { bootstrapRareRuns } from "./bootstrap-rare-runs.js";
+
 import { anchorOverlap } from "./anchor-overlap.js";
 import { normalizedAnchorOverlap } from "./normalized-anchor-overlap.js";
 import { seedExtendOverlapRate } from "./seed-extend-overlap-rate.js";
@@ -102,6 +110,12 @@ import { vntrModuleSpectrum } from "./vntr-module-spectrum.js";
 import { cargoTransferScore } from "./cargo-transfer-score.js";
 import { moduleCopyNumber } from "./module-copy-number.js";
 import { breakpointHomology } from "./breakpoint-homology.js";
+import { runEntropy } from "./run-entropy.js";
+import { rareRunMass } from "./rare-run-mass.js";
+import { multiKRareRuns } from "./multi-k-rare-runs.js";
+import { relatednessEstimator } from "./relatedness-estimator.js";
+import { layerIsolation } from "./layer-isolation.js";
+import { bootstrapRareRuns } from "./bootstrap-rare-runs.js";
 
 /** All available experiments, ordered by expected signal strength */
 export const ALL_EXPERIMENTS: Experiment[] = [
@@ -164,4 +178,12 @@ export const ALL_EXPERIMENTS: Experiment[] = [
   cargoTransferScore,
   moduleCopyNumber,
   breakpointHomology,
+
+  // Rare-run family strengthening algorithms
+  runEntropy,
+  rareRunMass,
+  multiKRareRuns,
+  relatednessEstimator,
+  layerIsolation,
+  bootstrapRareRuns,
 ];

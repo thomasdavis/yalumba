@@ -1,0 +1,25 @@
+{
+  "name": "@yalumba/compute",
+  "version": "0.0.1",
+  "description": "Native compute acceleration — C FFI for k-mer operations, run scanning, set operations",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "bun": "./src/index.ts",
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build:native": "cd native && make",
+    "build": "bun run build:native && tsc -b",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist .turbo *.tsbuildinfo native/*.dylib native/*.o"
+  },
+  "dependencies": {
+    "@yalumba/math": "workspace:*"
+  }
+}
