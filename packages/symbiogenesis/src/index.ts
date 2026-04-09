@@ -9,3 +9,4 @@ export type {
 } from "./types.js";
 
 export { modulePersistence } from "./algorithms/module-persistence.js";
+export { coalitionTransfer } from "./algorithms/coalition-transfer.js";

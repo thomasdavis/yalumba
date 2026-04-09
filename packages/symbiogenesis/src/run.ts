@@ -10,6 +10,12 @@ import { existsSync } from "fs";
 import { FastqParser } from "@yalumba/fastq";
 import type { SymbioAlgorithm, SampleReads, DatasetDef, PairResult } from "./types.js";
 import { modulePersistence } from "./algorithms/module-persistence.js";
+import { coalitionTransfer } from "./algorithms/coalition-transfer.js";
+
+const ALGORITHMS: Record<string, SymbioAlgorithm> = {
+  "module-persistence": modulePersistence,
+  "coalition-transfer": coalitionTransfer,
+};
 
 const ROOT = join(import.meta.dir, "../../../");
 
@@ -163,8 +169,16 @@ async function runAlgorithm(alg: SymbioAlgorithm): Promise<void> {
   console.log("  4. SANKEY: Module flow from grandparents → parents (inheritance paths)");
 }
 
-// Run the first algorithm
-runAlgorithm(modulePersistence).catch((err) => {
+// Select algorithm from CLI arg or default to coalition-transfer
+const algName = process.argv[2] ?? "coalition-transfer";
+const alg = ALGORITHMS[algName];
+if (!alg) {
+  console.error(`Unknown algorithm: ${algName}`);
+  console.error(`Available: ${Object.keys(ALGORITHMS).join(", ")}`);
+  process.exit(1);
+}
+
+runAlgorithm(alg).catch((err) => {
   console.error("Error:", err);
   process.exit(1);
 });
