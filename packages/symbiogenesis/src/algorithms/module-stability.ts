@@ -52,6 +52,10 @@ interface PreparedContext {
   informativeMotifs: Set<number>;
   /** All motifs that are stable in at least one sample */
   allStableMotifs: Set<number>;
+  /** Stable motif → how many samples it is stable in (for rarity weighting) */
+  motifPresenceCount: Map<number, number>;
+  /** Total number of samples */
+  sampleCount: number;
 }
 
 export const moduleStability: SymbioAlgorithm = {
@@ -100,7 +104,7 @@ export const moduleStability: SymbioAlgorithm = {
     console.log(`      Informative (not universal): ${informativeMotifs.size}`);
     console.log(`    [stability-v2] Total prep: ${((performance.now() - t0) / 1000).toFixed(1)}s`);
 
-    return { profiles, informativeMotifs, allStableMotifs };
+    return { profiles, informativeMotifs, allStableMotifs, motifPresenceCount: stablePresence, sampleCount: samples.length };
   },
 
   compare(a: SampleReads, b: SampleReads, context: unknown): ComparisonScore {
@@ -108,41 +112,64 @@ export const moduleStability: SymbioAlgorithm = {
     const profA = ctx.profiles.get(a.id)!;
     const profB = ctx.profiles.get(b.id)!;
 
-    // ── Score 1: Informative stable motif Jaccard ──
-    // How many informative motifs are stably modular in BOTH samples?
+    // ── Score 1: Rarity-weighted stable motif Jaccard ──
+    // Shared stable motifs weighted by log(N/count) — motifs stable in
+    // fewer samples get higher weight (mirrors module-persistence's
+    // rarity weighting which is the key to separation).
+    let rarityNumer = 0;
+    let rarityDenom = 0;
     let sharedStable = 0;
     let unionStable = 0;
     for (const motif of ctx.informativeMotifs) {
       const inA = profA.stableMotifs.has(motif);
       const inB = profB.stableMotifs.has(motif);
-      if (inA && inB) sharedStable++;
-      if (inA || inB) unionStable++;
+      if (inA || inB) {
+        const count = ctx.motifPresenceCount.get(motif) ?? ctx.sampleCount;
+        const weight = Math.log(ctx.sampleCount / count);
+        rarityDenom += weight;
+        unionStable++;
+        if (inA && inB) {
+          rarityNumer += weight;
+          sharedStable++;
+        }
+      }
     }
-    const motifJaccard = unionStable > 0 ? sharedStable / unionStable : 0;
+    const rarityJaccard = rarityDenom > 0 ? rarityNumer / rarityDenom : 0;
 
-    // ── Score 2: Stability cosine similarity ──
-    // Compare HOW stable each motif is across the two samples.
-    // Uses ALL informative motifs (not just those passing threshold),
-    // since partial stability values carry signal.
-    let dot = 0, normA = 0, normB = 0;
+    // ── Score 2: Stability-magnitude rarity Jaccard ──
+    // Like rarity Jaccard, but each shared motif is additionally
+    // weighted by min(stability_A, stability_B). This rewards motifs
+    // that are HIGHLY stable in both samples AND rare — a stronger
+    // genetic inheritance signal than mere binary presence.
+    let stabRarNumer = 0;
+    let stabRarDenom = 0;
     for (const motif of ctx.informativeMotifs) {
-      const sa = profA.motifStability.get(motif) ?? 0;
-      const sb = profB.motifStability.get(motif) ?? 0;
-      dot += sa * sb;
-      normA += sa * sa;
-      normB += sb * sb;
+      const inA = profA.stableMotifs.has(motif);
+      const inB = profB.stableMotifs.has(motif);
+      if (inA || inB) {
+        const count = ctx.motifPresenceCount.get(motif) ?? ctx.sampleCount;
+        const rarity = Math.log(ctx.sampleCount / count);
+        const sa = profA.motifStability.get(motif) ?? 0;
+        const sb = profB.motifStability.get(motif) ?? 0;
+        // Max possible contribution per motif for the denominator
+        const maxStab = Math.max(sa, sb);
+        stabRarDenom += maxStab * rarity;
+        if (inA && inB) {
+          // Shared: use min stability as the weight
+          stabRarNumer += Math.min(sa, sb) * rarity;
+        }
+      }
     }
-    const denom = Math.sqrt(normA) * Math.sqrt(normB);
-    const stabCosine = denom > 0 ? dot / denom : 0;
+    const stabRarJaccard = stabRarDenom > 0 ? stabRarNumer / stabRarDenom : 0;
 
     // ── Combined score ──
-    // Jaccard captures shared module membership;
-    // Cosine captures correlated stability patterns
-    const score = motifJaccard * 0.55 + stabCosine * 0.45;
+    // Both signals reward rare shared motifs; the stability-magnitude
+    // version additionally penalizes motifs with asymmetric stability
+    const score = rarityJaccard * 0.55 + stabRarJaccard * 0.45;
 
     return {
       score,
-      detail: `motifJacc=${sharedStable}/${unionStable} (${(motifJaccard * 100).toFixed(1)}%) stabCos=${stabCosine.toFixed(4)} stableA=${profA.stableMotifs.size} stableB=${profB.stableMotifs.size}`,
+      detail: `rarJacc=${sharedStable}/${unionStable} (${(rarityJaccard * 100).toFixed(1)}%) stabRar=${(stabRarJaccard * 100).toFixed(1)}% stableA=${profA.stableMotifs.size} stableB=${profB.stableMotifs.size}`,
     };
   },
 };

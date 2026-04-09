@@ -1,24 +1,21 @@
 /**
- * Algorithm Family 2: Coalition Transfer (v2)
+ * Algorithm Family 2: Coalition Transfer (v3)
  *
  * Core idea: measure how often COMBINATIONS of modules are inherited
  * together as a unit. Related individuals share not just modules but
  * specific COALITIONS — sets of modules that co-occur in reads.
  *
- * v2 changes:
- *   - Drop integrityCosine (was always 1.0 — not discriminative)
- *   - Primary signal: IDF-weighted rarity score (best separation)
- *   - Secondary signal: coalition frequency correlation (shared coalitions
- *     should have correlated read counts in related individuals)
- *   - Tertiary signal: exclusive coalition ratio (fraction of informative
- *     coalitions that are ONLY shared between these two samples)
+ * v3 changes:
+ *   - Three-way blend: rarity + exclusive + unweighted freq cosine
+ *   - Frequency cosine is UNWEIGHTED (no IDF) to avoid boosting in-laws
+ *   - Tuned weights near the best known configuration
  *
  * This is genuinely symbiogenesis-native: the signal comes from
  * COMPOSITE INHERITANCE UNITS, not individual markers.
  */
 
 import type { SymbioAlgorithm, SampleReads, ComparisonScore } from "../types.js";
-import { buildModules, buildModuleGraph } from "@yalumba/modules";
+import { buildModules } from "@yalumba/modules";
 import type { Module } from "@yalumba/modules";
 
 interface CoalitionProfile {
@@ -41,16 +38,16 @@ interface PreparedContext {
 
 export const coalitionTransfer: SymbioAlgorithm = {
   name: "Coalition transfer",
-  version: 2,
-  description: "Rarity-focused coalition scoring with frequency correlation — composite inheritance units",
+  version: 3,
+  description: "Three-way coalition scoring: rarity + exclusive + unweighted frequency cosine",
   family: "coalition-transfer",
   maxReadsPerSample: 50_000,
 
   prepare(samples): PreparedContext {
     const t0 = performance.now();
 
-    // ── Step 1: Build shared module vocabulary with LARGER windows ──
-    console.log("    [coalition] Step 1: Build modules (window=150bp)...");
+    // ── Step 1: Build shared module vocabulary ──
+    console.log("    [coalition-v3] Step 1: Build modules (window=150bp)...");
     const allModules: Module[] = [];
     const fpToId = new Map<number, number>();
     let nextId = 0;
@@ -59,9 +56,9 @@ export const coalitionTransfer: SymbioAlgorithm = {
       const st = performance.now();
       const modules = buildModules(sample.reads, {
         motifK: 15,
-        windowSize: 150,   // 3x larger than v1 — better haplotype coverage
-        minSupport: 5,     // higher support threshold for stability
-        minCohesion: 0.25, // slightly lower cohesion to find larger modules
+        windowSize: 150,
+        minSupport: 5,
+        minCohesion: 0.25,
       });
 
       for (const mod of modules) {
@@ -84,7 +81,7 @@ export const coalitionTransfer: SymbioAlgorithm = {
     }
 
     // ── Step 3: Build coalition profiles per sample ──
-    console.log("    [coalition] Step 2: Build coalition profiles...");
+    console.log("    [coalition-v3] Step 2: Build coalition profiles...");
     const profiles = new Map<string, CoalitionProfile>();
 
     for (const sample of samples) {
@@ -95,7 +92,7 @@ export const coalitionTransfer: SymbioAlgorithm = {
     }
 
     // ── Step 4: Identify informative coalitions ──
-    console.log("    [coalition] Step 3: Filter informative coalitions...");
+    console.log("    [coalition-v3] Step 3: Filter informative coalitions...");
     const coalitionPresence = new Map<number, number>();
     for (const [, profile] of profiles) {
       for (const fp of profile.coalitions.keys()) {
@@ -110,7 +107,7 @@ export const coalitionTransfer: SymbioAlgorithm = {
       }
     }
     console.log(`      ${informativeCoalitions.size} informative coalitions (of ${coalitionPresence.size} total)`);
-    console.log(`    [coalition] Total prep: ${((performance.now() - t0) / 1000).toFixed(1)}s`);
+    console.log(`    [coalition-v3] Total prep: ${((performance.now() - t0) / 1000).toFixed(1)}s`);
 
     return {
       sharedModules: allModules,
@@ -127,8 +124,7 @@ export const coalitionTransfer: SymbioAlgorithm = {
     const profA = ctx.profiles.get(a.id)!;
     const profB = ctx.profiles.get(b.id)!;
 
-    // ── Score 1: Rarity-weighted coalition overlap (IDF) ──
-    // Coalitions in fewer samples get exponentially higher weight
+    // ── Score 1: Rarity-weighted coalition Jaccard (IDF) ──
     let weightedShared = 0;
     let weightedTotal = 0;
     for (const fp of ctx.informativeCoalitions) {
@@ -144,9 +140,6 @@ export const coalitionTransfer: SymbioAlgorithm = {
     const rarityScore = weightedTotal > 0 ? weightedShared / weightedTotal : 0;
 
     // ── Score 2: Exclusive pair coalition ratio ──
-    // Coalitions shared by ONLY these two samples (presence == 2, both have it)
-    // Normalized by the SMALLER sample's total informative coalition count
-    // (prevents high-coverage samples from dominating)
     let exclusiveShared = 0;
     let sizeA = 0, sizeB = 0;
     for (const fp of ctx.informativeCoalitions) {
@@ -158,13 +151,10 @@ export const coalitionTransfer: SymbioAlgorithm = {
       }
     }
     const minSize = Math.min(sizeA, sizeB);
-    const exclusiveRatio = minSize > 0
-      ? exclusiveShared / minSize
-      : 0;
+    const exclusiveRatio = minSize > 0 ? exclusiveShared / minSize : 0;
 
-    // ── Score 3: Coalition frequency correlation ──
-    // For shared informative coalitions, how correlated are their read counts?
-    // Related individuals should have similar coalition frequency profiles.
+    // ── Score 3: Unweighted frequency cosine ──
+    // NO IDF weighting — plain frequency cosine on informative coalitions
     const sharedFps: number[] = [];
     for (const fp of ctx.informativeCoalitions) {
       if (profA.coalitions.has(fp) && profB.coalitions.has(fp)) {
@@ -172,31 +162,27 @@ export const coalitionTransfer: SymbioAlgorithm = {
       }
     }
 
-    // ── Score 3: Rarity-weighted frequency cosine ──
-    // Weight each shared coalition's frequency by its IDF rarity
-    let freqCorr = 0;
+    let freqCos = 0;
     if (sharedFps.length >= 3) {
       let dot = 0, normA = 0, normB = 0;
       for (const fp of sharedFps) {
-        const presence = ctx.coalitionPresence.get(fp) ?? ctx.numSamples;
-        const w = Math.log2(ctx.numSamples / presence); // IDF weight
-        const fa = (profA.coalitions.get(fp) ?? 0) * w;
-        const fb = (profB.coalitions.get(fp) ?? 0) * w;
+        const fa = profA.coalitions.get(fp) ?? 0;
+        const fb = profB.coalitions.get(fp) ?? 0;
         dot += fa * fb;
         normA += fa * fa;
         normB += fb * fb;
       }
       const denom = Math.sqrt(normA) * Math.sqrt(normB);
-      freqCorr = denom > 0 ? dot / denom : 0;
+      freqCos = denom > 0 ? dot / denom : 0;
     }
 
     // ── Combined score ──
-    // Exclusive + rarity only (frequency correlation helps in-laws too much)
-    const score = rarityScore * 0.55 + exclusiveRatio * 0.45;
+    // Three-way blend: shift weight toward exclusive (helps parent-child vs in-law)
+    const score = rarityScore * 0.35 + exclusiveRatio * 0.45 + freqCos * 0.20;
 
     return {
       score,
-      detail: `rarity=${(rarityScore * 100).toFixed(1)}% excl=${exclusiveShared}/${minSize} (${(exclusiveRatio * 100).toFixed(2)}%) freqCorr=${freqCorr.toFixed(4)} shared=${sharedFps.length}`,
+      detail: `rarity=${(rarityScore * 100).toFixed(1)}% excl=${exclusiveShared}/${minSize} (${(exclusiveRatio * 100).toFixed(2)}%) freqCos=${freqCos.toFixed(4)} shared=${sharedFps.length}`,
     };
   },
 };
@@ -210,7 +196,6 @@ function buildCoalitionProfile(
   const coalitionCounts = new Map<number, number>();
 
   for (const read of reads) {
-    // Find all modules present in this read
     const presentModules = new Set<number>();
     for (let i = 0; i <= read.length - k; i++) {
       const h = canonicalHash(read, i, k);
@@ -220,17 +205,12 @@ function buildCoalitionProfile(
 
     if (presentModules.size < 2) continue;
 
-    // Coalition = sorted set of module IDs → fingerprint
     const sorted = [...presentModules].sort((a, b) => a - b);
     const fp = hashCoalition(sorted);
-
     coalitionCounts.set(fp, (coalitionCounts.get(fp) ?? 0) + 1);
   }
 
-  return {
-    coalitions: coalitionCounts,
-    readCount: reads.length,
-  };
+  return { coalitions: coalitionCounts, readCount: reads.length };
 }
 
 function hashCoalition(ids: number[]): number {
