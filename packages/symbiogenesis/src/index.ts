@@ -10,3 +10,4 @@ export type {
 
 export { modulePersistence } from "./algorithms/module-persistence.js";
 export { coalitionTransfer } from "./algorithms/coalition-transfer.js";
+export { moduleStability } from "./algorithms/module-stability.js";

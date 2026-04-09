@@ -11,10 +11,12 @@ import { FastqParser } from "@yalumba/fastq";
 import type { SymbioAlgorithm, SampleReads, DatasetDef, PairResult } from "./types.js";
 import { modulePersistence } from "./algorithms/module-persistence.js";
 import { coalitionTransfer } from "./algorithms/coalition-transfer.js";
+import { moduleStability } from "./algorithms/module-stability.js";
 
 const ALGORITHMS: Record<string, SymbioAlgorithm> = {
   "module-persistence": modulePersistence,
   "coalition-transfer": coalitionTransfer,
+  "module-stability": moduleStability,
 };
 
 const ROOT = join(import.meta.dir, "../../../");
