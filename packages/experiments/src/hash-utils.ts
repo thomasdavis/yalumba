@@ -1,3 +1,7 @@
+// Re-export compute package utilities for algorithms that want them
+export { computeRunStatistics, scanRareRuns } from "@yalumba/compute";
+export type { RunScanResult, RunStatistics } from "@yalumba/compute";
+
 /** Fast FNV-1a hash for k-mer strings — returns 32-bit unsigned integer */
 export function fastHash(str: string, offset: number, len: number): number {
   let h = 0x811c9dc5 | 0;

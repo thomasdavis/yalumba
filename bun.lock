@@ -89,6 +89,7 @@
       "version": "0.0.1",
       "dependencies": {
         "@yalumba/alignment": "workspace:*",
+        "@yalumba/compute": "workspace:*",
         "@yalumba/fastq": "workspace:*",
         "@yalumba/kmer": "workspace:*",
         "@yalumba/math": "workspace:*",

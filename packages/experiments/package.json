@@ -23,6 +23,7 @@
     "@yalumba/kmer": "workspace:*",
     "@yalumba/alignment": "workspace:*",
     "@yalumba/relatedness": "workspace:*",
-    "@yalumba/math": "workspace:*"
+    "@yalumba/math": "workspace:*",
+    "@yalumba/compute": "workspace:*"
   }
 }

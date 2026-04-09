@@ -7,6 +7,7 @@
     { "path": "../kmer" },
     { "path": "../alignment" },
     { "path": "../relatedness" },
-    { "path": "../math" }
+    { "path": "../math" },
+    { "path": "../compute" }
   ]
 }
