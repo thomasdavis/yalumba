@@ -37,6 +37,14 @@ export { gapRunRatio } from "./gap-run-ratio.js";
 export { kmerSynteny } from "./kmer-synteny.js";
 export { multiScaleRuns } from "./multi-scale-runs.js";
 
+// Population-baseline algorithms
+export { rareKmerAmplification } from "./rare-kmer-amplification.js";
+export { differentialEcosystem } from "./differential-ecosystem.js";
+export { informationWeightedRuns } from "./information-weighted-runs.js";
+export { seedExtendHybrid } from "./seed-extend-hybrid.js";
+export { populationNormalizedCosine } from "./population-normalized-cosine.js";
+export { haplotypeContinuity } from "./haplotype-continuity.js";
+
 import { anchorOverlap } from "./anchor-overlap.js";
 import { normalizedAnchorOverlap } from "./normalized-anchor-overlap.js";
 import { seedExtendOverlapRate } from "./seed-extend-overlap-rate.js";
@@ -66,6 +74,12 @@ import { endosymbioticTransfer } from "./endosymbiotic-transfer.js";
 import { gapRunRatio } from "./gap-run-ratio.js";
 import { kmerSynteny } from "./kmer-synteny.js";
 import { multiScaleRuns } from "./multi-scale-runs.js";
+import { rareKmerAmplification } from "./rare-kmer-amplification.js";
+import { differentialEcosystem } from "./differential-ecosystem.js";
+import { informationWeightedRuns } from "./information-weighted-runs.js";
+import { seedExtendHybrid } from "./seed-extend-hybrid.js";
+import { populationNormalizedCosine } from "./population-normalized-cosine.js";
+import { haplotypeContinuity } from "./haplotype-continuity.js";
 
 /** All available experiments, ordered by expected signal strength */
 export const ALL_EXPERIMENTS: Experiment[] = [
@@ -107,4 +121,12 @@ export const ALL_EXPERIMENTS: Experiment[] = [
   gapRunRatio,
   kmerSynteny,
   multiScaleRuns,
+
+  // Population-baseline algorithms
+  rareKmerAmplification,
+  differentialEcosystem,
+  informationWeightedRuns,
+  seedExtendHybrid,
+  populationNormalizedCosine,
+  haplotypeContinuity,
 ];
