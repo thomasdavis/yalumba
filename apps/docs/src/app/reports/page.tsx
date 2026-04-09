@@ -3,6 +3,14 @@ import { Section } from "@/components/section";
 
 const reports = [
   {
+    slug: "final-comprehensive-2026-04",
+    title: "Reference-Free Genomic Relatedness Detection via Symbiogenesis-Inspired K-mer Ecosystem Analysis",
+    date: "April 2026",
+    abstract: "Definitive study: 35 algorithms across 3 datasets. Haplotype continuity — measuring run-lengths of rare shared k-mers — achieves +345% separation on same-population CEPH data where 32/35 other algorithms fail. Rare k-mer filtering removes the 98% population baseline, revealing IBD-specific signal. Complete open-source framework with multi-dataset caching.",
+    authors: "yalumba project",
+    tags: ["comprehensive", "35 algorithms", "3 datasets", "haplotype continuity", "rare k-mers", "symbiogenesis"],
+  },
+  {
     slug: "cross-dataset-2026-04",
     title: "Cross-Dataset Validation: 29 Algorithms on 3 Datasets (Synthetic, GIAB, CEPH 1463)",
     date: "April 2026",
