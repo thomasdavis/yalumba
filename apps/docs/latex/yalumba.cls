@@ -38,47 +38,72 @@
 % ── Line spacing ──
 \setstretch{1.3}
 
-% ── Colors (matching yalumba web theme) ──
-\definecolor{yalumba-cyan}{HTML}{22D3EE}
-\definecolor{yalumba-violet}{HTML}{A78BFA}
-\definecolor{dna-A}{HTML}{22C55E}
-\definecolor{dna-C}{HTML}{3B82F6}
-\definecolor{dna-G}{HTML}{F59E0B}
-\definecolor{dna-T}{HTML}{EF4444}
-\definecolor{bg-dark}{HTML}{0A0A0A}
-\definecolor{surface}{HTML}{111111}
-\definecolor{surface-2}{HTML}{1A1A1A}
-\definecolor{text-muted}{HTML}{737373}
-\definecolor{table-alt}{HTML}{F5F5F5}
-\definecolor{table-header}{HTML}{1A1A1A}
-\definecolor{code-bg}{HTML}{111111}
-\definecolor{pullquote-bg}{HTML}{F8FAFC}
-\definecolor{keyfinding-bg}{HTML}{F0FDF4}
-\definecolor{limitation-bg}{HTML}{FFFBEB}
-\definecolor{definition-bg}{HTML}{EFF6FF}
+% ── Colors (Yalumba wine palette — from Winesmiths Shiraz packaging) ──
+% Primary: deep wine burgundy
+\definecolor{yalumba-wine}{HTML}{6B1D2A}
+% Accent: champagne gold
+\definecolor{yalumba-gold}{HTML}{C4A35A}
+% Warm cream (paper/label tone)
+\definecolor{yalumba-cream}{HTML}{F5F0E8}
+% Charcoal (body text emphasis)
+\definecolor{yalumba-charcoal}{HTML}{2D2D2D}
+% Slate gray (secondary text)
+\definecolor{yalumba-slate}{HTML}{5A5A5A}
+% Rich black (deep accents)
+\definecolor{yalumba-black}{HTML}{1A1A1A}
+% Lighter burgundy for tints
+\definecolor{yalumba-rose}{HTML}{8B3A4A}
+% Warm paper white
+\definecolor{yalumba-paper}{HTML}{FDFBF7}
 
-% ── Hyperref setup ──
+% Semantic aliases (used throughout the class)
+\definecolor{accent}{HTML}{6B1D2A}        % wine — primary accent
+\definecolor{accent-light}{HTML}{8B3A4A}  % rose — lighter accent
+\definecolor{accent-gold}{HTML}{C4A35A}   % gold — secondary accent
+\definecolor{bg-dark}{HTML}{1A1A1A}
+\definecolor{surface}{HTML}{2D2D2D}
+\definecolor{surface-2}{HTML}{3D3D3D}
+\definecolor{text-muted}{HTML}{5A5A5A}
+\definecolor{table-alt}{HTML}{F5F0E8}     % cream alternating rows
+\definecolor{table-header}{HTML}{2D2D2D}  % charcoal header
+\definecolor{code-bg}{HTML}{2D2D2D}       % charcoal code blocks
+\definecolor{pullquote-bg}{HTML}{FDFBF7}  % warm paper
+\definecolor{keyfinding-bg}{HTML}{F5F0E8} % cream
+\definecolor{limitation-bg}{HTML}{FDF2F2} % very light rose
+\definecolor{definition-bg}{HTML}{F5F0E8} % cream
+
+% Legacy aliases for compatibility
+\colorlet{yalumba-cyan}{yalumba-wine}
+\colorlet{yalumba-violet}{yalumba-gold}
+
+% DNA base colors (used in \dnaseq command — kept as subtle grays for print)
+\definecolor{dna-A}{HTML}{4A4A4A}
+\definecolor{dna-C}{HTML}{5A5A5A}
+\definecolor{dna-G}{HTML}{6A6A6A}
+\definecolor{dna-T}{HTML}{7A7A7A}
+
+% ── Hyperref setup (understated — dark links, not colorful) ──
 \hypersetup{
   colorlinks=true,
-  linkcolor=yalumba-cyan!80!black,
-  citecolor=yalumba-violet!80!black,
-  urlcolor=yalumba-cyan!80!black,
+  linkcolor=yalumba-charcoal,
+  citecolor=yalumba-slate,
+  urlcolor=yalumba-slate,
   pdfborder={0 0 0},
 }
 
-% ── Section color cycling ──
+% ── Section color cycling (wine palette tones) ──
 \newcounter{sectioncoloridx}
 \setcounter{sectioncoloridx}{0}
 
 \newcommand{\getsectioncolor}{%
   \ifcase\value{sectioncoloridx}%
-    dna-A%  0 -> green
+    yalumba-wine%   0 -> deep burgundy
   \or
-    dna-C%  1 -> blue
+    yalumba-gold%   1 -> champagne gold
   \or
-    dna-G%  2 -> amber
+    yalumba-rose%   2 -> lighter burgundy
   \or
-    dna-T%  3 -> red
+    yalumba-slate%  3 -> warm slate
   \fi
 }
 
@@ -98,12 +123,12 @@
 % Thin colored line at top of page
 \fancyhead[C]{%
   \begin{tikzpicture}[remember picture,overlay]
-    \draw[yalumba-cyan,line width=1pt]
+    \draw[yalumba-wine,line width=1pt]
       ([yshift=-0.5cm]current page.north west)
       -- ([yshift=-0.5cm]current page.north east);
   \end{tikzpicture}%
 }
-\fancyhead[L]{\small\color{yalumba-cyan}\textsf{\textbf{yalumba}}}
+\fancyhead[L]{\small\color{yalumba-charcoal}\textsf{\textbf{yalumba}}}
 \fancyhead[R]{\small\color{text-muted}\textsf{\nouppercase{\leftmark}}}
 \fancyfoot[C]{\small\color{text-muted}\textsf{Page \thepage\ of \pageref{LastPage}}}
 
@@ -144,8 +169,8 @@
 \renewcommand{\maketitle}{%
   \thispagestyle{empty}
   \begin{tikzpicture}[remember picture,overlay]
-    % ── Subtle accent line at top (single thin cyan rule) ──
-    \fill[yalumba-cyan] (current page.north west)
+    % ── Subtle accent line at top (single thin wine rule) ──
+    \fill[yalumba-wine] (current page.north west)
       rectangle ([yshift=-3pt]current page.north east);
     %
     % ── DNA watermark along left edge ──
@@ -165,7 +190,7 @@
        GCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAGCTAG};
     %
     % ── Subtle sidebar accent ──
-    \fill[yalumba-cyan,opacity=0.08]
+    \fill[yalumba-wine,opacity=0.06]
       (current page.north west) rectangle
       ([xshift=5pt]current page.south west);
   \end{tikzpicture}
@@ -173,12 +198,12 @@
   \vspace*{3cm}
 
   % ── Branding line ──
-  {\color{yalumba-cyan}\textsf{\textsc{\large yalumba}}%
+  {\color{yalumba-charcoal}\textsf{\textsc{\large yalumba}}%
    \hfill
    \textsf{\small reference-free genomics}}
 
   \vspace{0.3cm}
-  {\color{yalumba-cyan}\rule{\textwidth}{0.5pt}}
+  {\color{yalumba-wine}\rule{\textwidth}{0.5pt}}
 
   \vspace{1cm}
 
@@ -188,7 +213,7 @@
   \vspace{1.2cm}
 
   % ── Author and date ──
-  {\large\color{yalumba-violet}\textsf{\@author}%
+  {\large\color{yalumba-charcoal}\textsf{\@author}%
    \hfill
    \textsf{\@date}}
 
@@ -202,18 +227,18 @@
     enhanced,
     colback=white,
     colframe=white,
-    borderline west={3pt}{0pt}{yalumba-cyan},
-    borderline north={0.5pt}{0pt}{yalumba-cyan!30},
-    borderline south={0.5pt}{0pt}{yalumba-cyan!30},
+    borderline west={3pt}{0pt}{yalumba-wine},
+    borderline north={0.5pt}{0pt}{yalumba-wine!20},
+    borderline south={0.5pt}{0pt}{yalumba-wine!20},
     left=14pt,
     right=14pt,
     top=12pt,
     bottom=12pt,
     sharp corners,
     boxrule=0pt,
-    shadow={1pt}{-1pt}{0pt}{yalumba-cyan!8},
+    shadow={1pt}{-1pt}{0pt}{yalumba-wine!8},
   ]
-  {\sffamily\bfseries\color{yalumba-cyan}\small ABSTRACT}%
+  {\sffamily\bfseries\color{yalumba-charcoal}\small ABSTRACT}%
   \par\vspace{6pt}
   {\small\@abstract}
   \end{tcolorbox}
@@ -222,7 +247,7 @@
 
   % ── Subtle footer accent ──
   \begin{tikzpicture}[remember picture,overlay]
-    \fill[yalumba-cyan,opacity=0.15]
+    \fill[yalumba-wine,opacity=0.12]
       ([yshift=6pt]current page.south west)
       rectangle ([yshift=9pt]current page.south east);
   \end{tikzpicture}
@@ -231,7 +256,7 @@
 }
 
 % ── Margin note command ──
-\newcommand{\ymarginnote}[2][yalumba-cyan]{%
+\newcommand{\ymarginnote}[2][yalumba-slate]{%
   \marginnote{%
     \raggedright\footnotesize\color{#1}\sffamily #2%
   }%
@@ -244,11 +269,11 @@
   enhanced,
   colback=keyfinding-bg,
   colframe=white,
-  borderline west={3.5pt}{0pt}{dna-A},
+  borderline west={3.5pt}{0pt}{yalumba-wine},
   left=12pt, right=10pt, top=10pt, bottom=10pt,
   sharp corners,
   boxrule=0pt,
-  fonttitle=\sffamily\bfseries\color{dna-A},
+  fonttitle=\sffamily\bfseries\color{yalumba-charcoal},
   title={\raisebox{-0.5pt}{$\blacktriangleright$}\enspace Key Finding},
   breakable,
   before upper={\setstretch{1.2}},
@@ -259,11 +284,11 @@
   enhanced,
   colback=limitation-bg,
   colframe=white,
-  borderline west={3.5pt}{0pt}{dna-G},
+  borderline west={3.5pt}{0pt}{yalumba-gold},
   left=12pt, right=10pt, top=10pt, bottom=10pt,
   sharp corners,
   boxrule=0pt,
-  fonttitle=\sffamily\bfseries\color{dna-G!80!black},
+  fonttitle=\sffamily\bfseries\color{yalumba-charcoal},
   title={\raisebox{-0.5pt}{$\blacktriangle$}\enspace Limitation},
   breakable,
   before upper={\setstretch{1.2}},
@@ -274,18 +299,18 @@
   enhanced,
   colback=definition-bg,
   colframe=white,
-  borderline west={3.5pt}{0pt}{dna-C},
+  borderline west={3.5pt}{0pt}{yalumba-slate},
   left=12pt, right=10pt, top=10pt, bottom=10pt,
   sharp corners,
   boxrule=0pt,
-  fonttitle=\sffamily\bfseries\color{dna-C},
+  fonttitle=\sffamily\bfseries\color{yalumba-charcoal},
   title={\raisebox{-0.5pt}{$\bullet$}\enspace Definition},
   breakable,
   before upper={\setstretch{1.2}},
 }
 
 % ── Pull quote environment ──
-\newenvironment{pullquote}[1][yalumba-cyan]{%
+\newenvironment{pullquote}[1][yalumba-slate]{%
   \begin{center}
   \begin{minipage}{0.85\textwidth}
   \begin{tcolorbox}[
@@ -298,7 +323,7 @@
     sharp corners,
     boxrule=0pt,
   ]
-  \centering\large\color{#1!80!black}\sffamily\bfseries
+  \centering\large\color{yalumba-charcoal}\sffamily\bfseries
 }{%
   \end{tcolorbox}
   \end{minipage}
@@ -328,8 +353,8 @@
 \lstdefinestyle{yalumba}{
   backgroundcolor=\color{code-bg},
   basicstyle=\ttfamily\small\color{white},
-  keywordstyle=\color{yalumba-cyan}\bfseries,
-  stringstyle=\color{dna-A},
+  keywordstyle=\color{white}\bfseries,
+  stringstyle=\color{white!70},
   commentstyle=\color{text-muted}\itshape,
   numberstyle=\tiny\color{text-muted},
   breaklines=true,
@@ -348,7 +373,7 @@
 
 % ── Equation tag coloring ──
 \makeatletter
-\def\tagform@#1{\maketag@@@{\color{yalumba-cyan!70!black}(\ignorespaces#1\unskip\@@italiccorr)}}
+\def\tagform@#1{\maketag@@@{\color{yalumba-charcoal}(\ignorespaces#1\unskip\@@italiccorr)}}
 \makeatother
 
 % ── DNA sequence decoration ──
@@ -368,8 +393,8 @@
 \newenvironment{pedigree}{%
   \begin{tcolorbox}[
     enhanced, colback=surface!3, colframe=surface!15,
-    borderline north={0.5pt}{0pt}{yalumba-cyan!30},
-    borderline south={0.5pt}{0pt}{yalumba-cyan!30},
+    borderline north={0.5pt}{0pt}{yalumba-wine!20},
+    borderline south={0.5pt}{0pt}{yalumba-wine!20},
     left=14pt, right=14pt, top=10pt, bottom=10pt,
     sharp corners, boxrule=0.5pt,
     fonttitle=\sffamily\small\color{text-muted},
@@ -383,14 +408,14 @@
 % ── Caption styling ──
 \captionsetup{
   font={small,sf},
-  labelfont={bf,color=yalumba-cyan!80!black},
+  labelfont={bf,color=yalumba-charcoal},
   format=plain,
   margin=0.5cm,
 }
 
 % ── List styling ──
 \setlist{leftmargin=2em,itemsep=0.3em}
-\setlist[itemize]{label={\color{yalumba-cyan}\textbullet}}
-\setlist[enumerate]{label={\color{yalumba-cyan}\arabic*.}}
+\setlist[itemize]{label={\color{yalumba-wine}\textbullet}}
+\setlist[enumerate]{label={\color{yalumba-wine}\arabic*.}}
 
 \endinput
