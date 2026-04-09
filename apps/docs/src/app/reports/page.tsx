@@ -3,6 +3,14 @@ import { Section } from "@/components/section";
 
 const reports = [
   {
+    slug: "sv-ecology-44-algorithms-2026-04",
+    title: "44 Algorithms for Reference-Free Relatedness: From K-mer Jaccard to SV Ecology",
+    date: "April 2026",
+    abstract: "Complete 44-algorithm study across 7 categories and 3 datasets. Introduces SV ecology algorithms (cargo transfer, VNTR module spectra, breakpoint homology) inspired by long-read structural variation research. Rare-Run P90 remains champion at +583% on CEPH. Documents the full algorithm design ladder from naive set overlap to population-aware informative overlap.",
+    authors: "yalumba project",
+    tags: ["44 algorithms", "SV ecology", "7 categories", "CEPH 1463", "rare-run P90", "final"],
+  },
+  {
     slug: "final-comprehensive-2026-04",
     title: "Reference-Free Genomic Relatedness Detection via Symbiogenesis-Inspired K-mer Ecosystem Analysis",
     date: "April 2026",
