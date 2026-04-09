@@ -3,6 +3,14 @@ import { Section } from "@/components/section";
 
 const reports = [
   {
+    slug: "module-persistence-2026-04",
+    title: "Module Persistence Graphs: First Symbiogenesis-Native Algorithm for Reference-Free Relatedness Detection",
+    date: "April 2026",
+    abstract: "Introduces the Module Persistence Graph (MPG), the first algorithm operating on co-occurring motif modules rather than singleton k-mers. MPG v2 achieves +4.76% separation on CEPH 1463 with 3/4 parent-child pairs detected, but the weakest related pair falls below an in-law pair (-3.17% gap). Reveals that population sharing at the module level mirrors the k-mer sharing wall. Preparation takes 1084.6s with instantaneous comparison (0.0s per pair).",
+    authors: "yalumba project",
+    tags: ["module persistence", "symbiogenesis-native", "graph topology", "CEPH 1463", "modules"],
+  },
+  {
     slug: "sv-ecology-44-algorithms-2026-04",
     title: "44 Algorithms for Reference-Free Relatedness: From K-mer Jaccard to SV Ecology",
     date: "April 2026",
