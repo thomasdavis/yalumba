@@ -4,150 +4,626 @@
 \author{Ajax Davis}
 \date{April 2026}
 
-\setabstract{We introduce a module-persistence scoring framework for detecting biological
-relatedness directly from raw sequencing reads, without alignment to a reference
-genome.  The method constructs a vocabulary of informative k-mer modules from
-each sample, then scores pairs by combining module-level Jaccard overlap,
-shared edge fraction, and spectral-signature cosine similarity into a single
-composite metric.  Evaluated on six members of the CEPH~1463 pedigree, the v2
-scorer achieves an average score of 0.388 for known parent--child pairs versus
-0.340 for unrelated pairs, yielding a separation of $+4.76\%$.  While the
-direction of separation is correct for every parent--child pair that shares a
-maternal lineage, the weakest gap ($-3.17\%$) reveals that one in-law pair
-currently scores above the lowest parent--child pair, indicating that spectral
-features alone are not yet sufficient for robust classification.  We discuss
-the failure modes and outline a path toward tighter separation through
-chromosome-aware module partitioning and frequency weighting.}
+\setabstract{%
+We introduce a module-persistence scoring framework for detecting biological
+relatedness directly from raw sequencing reads, bypassing reference-genome
+alignment, variant calling, and phasing entirely.  The method constructs a
+shared vocabulary of \emph{informative k-mer modules}---connected components
+of co-occurring 15-mers that appear in some but not all samples---and scores
+pairwise relatedness by combining three complementary signals: module-level
+Jaccard overlap ($J_M$), shared graph-edge fraction ($J_E$), and spectral
+cosine similarity ($\cos$) into a single composite metric
+$S = 0.3\,J_M + 0.4\,J_E + 0.3\,\cos$.
+Evaluated on six members of the CEPH~1463 three-generation pedigree
+(NA12877, NA12878, NA12889, NA12890, NA12891, NA12892), the v2 scorer
+achieves an average composite score of $0.3880$ for the four known
+parent--child pairs versus $0.3404$ for six unrelated or in-law pairs,
+yielding a mean separation of $+4.76$ percentage points.  The two
+maternal-lineage pairs (Mat.GF~$\to$~Mother at $0.4206$, Mat.GM~$\to$~Mother
+at $0.4130$) rank unambiguously above all unrelated pairs.  However, the
+weakest gap of $-3.17$ percentage points---driven by the in-law pair
+Mat.GF~$\leftrightarrow$~Father ($0.3741$) scoring above the parent--child
+pair Pat.GF~$\to$~Father ($0.3424$)---reveals that the current feature set
+cannot yet support threshold-based binary classification.  Compared to the v1
+baseline (raw k-mer Jaccard, $+2.02\%$ separation, 685\,s prep) and the
+Rare-Run P90 approach ($+583\%$ separation), v2 module persistence improves
+directional separation over v1 by a factor of 2.4$\times$ but remains far
+below the Rare-Run gold standard.  Module extraction runs at 1084.6\,s total
+(approximately 180\,s per sample) with a peak heap of 4805.6\,MB, while
+pairwise comparison is effectively instantaneous ($<0.01$\,s per pair).
+We discuss failure modes, component-level contributions, and outline a path
+toward tighter separation through chromosome-aware module partitioning,
+TF-IDF-style rare-module weighting, and GPU acceleration via the yalumba
+SPIR-V compute pipeline.}
 
 \begin{document}
 \maketitle
 
-% ────────────────────────────────────────────────────────────────
+\tableofcontents
+\newpage
+
+% ════════════════════════════════════════════════════════════════════
 \section{Introduction}
 \label{sec:intro}
 
-Standard relatedness estimation pipelines require a reference genome, read
-alignment, variant calling, and phasing before any comparison can be
-made~\cite{browning2012ibd}.  Each stage introduces errors and assumptions
-that compound through the pipeline.  Reference-free methods sidestep these
-stages by operating directly on raw sequencing data, comparing k-mer
-distributions between samples~\cite{ondov2016mash}.
+% ── The reference-free relatedness problem ──
 
-The core challenge is that the vast majority of k-mers are shared across all
-humans; the informative signal lives in a small fraction of the total
-vocabulary.  Our previous baseline approach---raw Jaccard similarity over
-full k-mer sets---could detect relatedness on synthetic data but showed
-negligible separation on real whole-genome sequencing reads from the
-CEPH~1463 pedigree~\cite{ceph1463, 1000genomes2015}.
+\subsection{The Reference-Free Relatedness Problem}
 
-In this report we describe \emph{module persistence}, a method that extracts
-structured subsets of the k-mer space---modules---and tracks which modules
-persist across pairs of samples.  By combining module overlap with
-graph-edge sharing and spectral cosine similarity, we obtain a composite
-score that separates related from unrelated pairs in the correct direction,
-though not yet with the margin required for confident classification.
+Standard relatedness estimation is a multi-stage pipeline: reads are aligned to
+a reference genome, variants are called, genotypes are phased, and
+identity-by-descent (IBD) segments are inferred from shared
+haplotypes~\cite{browning2012ibd}.  Each stage introduces its own error
+distribution---mismapping in repetitive regions, false-positive variant calls
+in low-complexity sequence, switch errors in statistical phasing---and these
+errors compound unpredictably through the pipeline.  The result is that IBD
+estimates for distant relatives can vary by 20--40\% depending on which aligner,
+caller, and phasing tool are used~\cite{browning2013refinedibd}.
 
-% ────────────────────────────────────────────────────────────────
+\ymarginnote{Reference alignment introduces compounding errors at every stage.}
+
+A reference-free approach sidesteps the entire chain.  By operating directly on
+raw sequencing reads, we eliminate alignment bias, reference-allele artifacts,
+and the need for a population panel for phasing.  The price is that we lose the
+coordinate system that makes IBD detection tractable: without chromosomal
+positions, we cannot directly identify ``shared segments'' in the classical
+sense.
+
+The fundamental challenge is information density.  Any two humans share
+approximately 99.9\% of their genome at the nucleotide level.  At the k-mer
+level ($k = 15$), the sharing is even higher, because most 15-mers are common
+to the entire species.  The informative signal---the k-mers that distinguish
+related from unrelated pairs---lives in a vanishingly small fraction of the
+total vocabulary.
+
+\subsection{Why Modules Matter: From Tokens to Structures}
+
+Our previous experiments (archived as experiments 1--50 in the yalumba lab
+notebook) explored increasingly sophisticated ways to extract relatedness signal
+from k-mer distributions.  The trajectory followed a clear pattern:
+
+\begin{enumerate}
+  \item \textbf{Raw Jaccard} over full k-mer sets: negligible separation on
+        real data (experiment~1--8).
+  \item \textbf{Frequency-filtered k-mers}: removing common k-mers improved
+        separation but introduced sensitivity to coverage depth (experiment~9--22).
+  \item \textbf{Run-length scoring}: detecting contiguous runs of shared rare
+        k-mers along reads produced the best baseline at $+583\%$ separation
+        (Rare-Run P90, experiment~38).
+  \item \textbf{Module persistence}: grouping co-occurring k-mers into modules
+        and tracking module-level sharing (this work, experiment~47--50).
+\end{enumerate}
+
+The conceptual shift from tokens (individual k-mers) to structures (modules of
+co-occurring k-mers) is motivated by a biological observation: inherited DNA is
+not a bag of independent k-mers.  When a child inherits a haplotype block from
+a parent, the k-mers within that block co-occur in a specific spatial pattern
+across reads.  A module captures exactly this pattern---a connected component of
+k-mers that appear together within a genomic window more often than expected by
+chance.
+
+\subsection{The Symbiogenesis Framing}
+
+\ymarginnote[yalumba-violet]{Margulis: complex structures arise from the merger of simpler organisms.}
+
+We borrow the term \emph{symbiogenesis} from Lynn Margulis's theory of
+eukaryotic evolution~\cite{margulis1998}.  In Margulis's framework, complex
+cellular structures (mitochondria, chloroplasts) arose not through gradual
+mutation but through the \emph{merger} of previously independent organisms into
+a new, more capable whole.
+
+Our module-persistence framework operates by an analogous mechanism: individual
+k-mers (the ``organisms'') are merged into modules (the ``symbiotic
+complexes'') based on their co-occurrence patterns.  The modules that persist
+across samples---that survive the ``selection pressure'' of appearing in
+multiple independently sequenced individuals---are the ones that carry
+biological signal.  This is not mere metaphor; the algorithmic structure
+directly mirrors the biological process of inheritance, where blocks of DNA
+persist across generations while the surrounding sequence diverges.
+
+\subsection{Contributions}
+
+This report makes the following contributions:
+
+\begin{enumerate}
+  \item A complete description of the module-persistence scoring framework,
+        including motif extraction, co-occurrence counting, module discovery,
+        shared vocabulary construction, informative filtering, and
+        three-component scoring.
+  \item A thorough evaluation on the CEPH~1463 pedigree with all 10 pairwise
+        scores, component breakdowns, and comparison to two baselines (v1 raw
+        Jaccard and Rare-Run P90).
+  \item An honest analysis of the method's failure modes, particularly the
+        negative weakest gap driven by the Pat.GF~$\to$~Father pair.
+  \item A detailed computational profile (timing, memory, scalability) and a
+        roadmap for native C and GPU acceleration.
+\end{enumerate}
+
+\subsection{Relationship to Prior Experiments}
+
+This work builds on 50 previous experiments archived in the yalumba lab notebook.
+The module-persistence approach was first prototyped in experiment~47, refined
+through experiments 48--49 (which explored different cohesion thresholds and
+window sizes), and reached its current form in experiment~50.  The v1 baseline
+referenced throughout this report corresponds to experiments 1--8, and the
+Rare-Run P90 baseline corresponds to experiment~38.  All experiments use the same
+six CEPH~1463 samples and the same 10-pair evaluation protocol, ensuring
+comparability.
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Background}
+\label{sec:background}
+
+\subsection{Classical IBD Detection Pipeline}
+
+The standard approach to relatedness estimation follows a well-established
+pipeline~\cite{browning2012ibd, gusev2009germline}:
+
+\begin{enumerate}
+  \item \textbf{Alignment.}  Raw reads are mapped to a reference genome (GRCh37
+        or GRCh38) using BWA-MEM or similar.  This produces coordinate-sorted
+        BAM files.
+  \item \textbf{Variant calling.}  SNPs and indels are identified using GATK
+        HaplotypeCaller, DeepVariant, or similar.  This produces VCF files.
+  \item \textbf{Phasing.}  Genotypes are phased to reconstruct haplotypes,
+        either statistically (Eagle, SHAPEIT) using a population panel or
+        physically using linked reads or long reads.
+  \item \textbf{IBD detection.}  Phased haplotypes are compared to identify
+        shared segments using tools like GERMLINE~\cite{gusev2009germline},
+        Refined IBD~\cite{browning2013refinedibd}, or
+        IBIS~\cite{browning2020ibis}.
+  \item \textbf{Relatedness estimation.}  Total IBD sharing (in centiMorgans)
+        is converted to a kinship coefficient or relationship classification.
+\end{enumerate}
+
+Each stage requires substantial computational resources and introduces
+stage-specific errors.  The total wall-clock time for a single whole-genome
+sample through this pipeline is typically 4--8 hours on a modern server, and
+the storage requirements (BAM + VCF + phased VCF) are 100--200\,GB per sample.
+
+\subsection{K-mer Based Approaches and Their Limitations}
+
+Reference-free methods based on k-mer comparison have been explored for
+several applications: phylogenetic placement~\cite{brinda2023phylogenetic},
+metagenomic distance estimation~\cite{ondov2016mash}, and relatedness
+estimation~\cite{fan2021reference}.
+
+\ymarginnote{Mash uses MinHash sketches of k-mer sets for fast genome distance.}
+
+The Mash algorithm~\cite{ondov2016mash} uses MinHash sketches of k-mer sets to
+estimate Jaccard distance between genomes.  While effective for inter-species
+comparison (where Jaccard distances are large), Mash struggles with
+intra-species relatedness where the signal-to-noise ratio is extremely low.
+Two random humans share $>99.9\%$ of their 21-mers; the informative fraction
+is $<0.1\%$.
+
+Fan et al.~\cite{fan2021reference} explored k-mer frequency spectra for
+relatedness, showing that frequency-based features can distinguish first-degree
+relatives from unrelated pairs in simulation.  However, their method has not
+been validated on real whole-genome data with the coverage depths typical of
+clinical sequencing ($30\times$).
+
+\subsection{The Population Sharing Wall}
+\label{sec:sharing-wall}
+
+The fundamental limit of k-mer approaches is what we term the
+\emph{population sharing wall}.  Consider a 21-mer chosen uniformly at random
+from the human genome.  If the population SNP rate is $0.001$ per base pair,
+the probability that this 21-mer is identical across two unrelated individuals
+from the same population is:
+
+\begin{equation}
+  P(\text{match}) = (1 - 0.001)^{21} \approx 0.979
+  \label{eq:sharing-wall}
+\end{equation}
+
+\begin{definition}
+The \textbf{population sharing wall} is the baseline k-mer sharing rate between
+any two individuals from the same population, independent of their biological
+relatedness.  At $k = 21$, this wall is approximately $97.9\%$---meaning that
+even unrelated individuals share the vast majority of their k-mers.
+\end{definition}
+
+\noindent This means that 97.9\% of all 21-mers are shared between \emph{any}
+two humans, regardless of relatedness.  The informative signal lives entirely
+in the remaining $\sim2\%$, and even within that 2\%, much of the variation is
+due to population structure rather than recent shared ancestry.
+
+At $k = 15$ (our choice for module extraction), the wall is even higher:
+$(1 - 0.001)^{15} \approx 0.985$, leaving only 1.5\% of k-mers as potentially
+informative.  We chose $k = 15$ despite this tighter margin because shorter
+k-mers produce denser co-occurrence graphs, which yield richer module
+structures.
+
+\subsection{From Singleton Tokens to Modular Inheritance}
+
+The key insight behind module persistence is that \emph{related individuals
+don't just share individual k-mers---they share patterns of k-mer
+co-occurrence}.  When a child inherits a haplotype block from a parent, all the
+k-mers within that block appear in reads from both individuals.  More
+importantly, they appear in the same spatial relationships: k-mer $A$ at
+position $p$, k-mer $B$ at position $p + 50$, k-mer $C$ at position $p + 120$,
+and so on.
+
+This spatial co-occurrence is lost when k-mers are treated as independent
+tokens (as in Jaccard or MinHash approaches).  Module persistence recovers it
+by building a graph of k-mer co-occurrence within genomic windows and
+extracting connected components.  These components---modules---capture the
+local haplotype structure that is inherited as a block.
+
+\subsection{Symbiogenesis in Biology and as Algorithmic Metaphor}
+
+Lynn Margulis proposed that the eukaryotic cell arose through a series of
+endosymbiotic events: free-living bacteria were engulfed by an ancestral cell
+and, rather than being digested, became permanent
+residents~\cite{margulis1998}.  The key features of symbiogenesis are:
+
+\begin{itemize}
+  \item \textbf{Merger:}  Simpler units combine into a more complex whole.
+  \item \textbf{Persistence:}  The merged entity is stable across generations.
+  \item \textbf{Emergent function:}  The whole has capabilities that neither
+        component had alone.
+\end{itemize}
+
+Our module-extraction algorithm follows the same pattern: individual k-mers
+(simple tokens) are merged into modules (complex structures) based on
+co-occurrence.  The modules that persist across samples carry more information
+about relatedness than any individual k-mer could.  The emergent property is
+\emph{discriminative power}---the ability to separate related from unrelated
+pairs---which arises from structure, not from any single token.
+
+
+% ════════════════════════════════════════════════════════════════════
 \section{Methods}
 \label{sec:methods}
 
-\subsection{Data}
+\subsection{Dataset: CEPH~1463 Pedigree}
 
 We use whole-genome sequencing reads for six members of the CEPH~1463
-three-generation pedigree~\cite{ceph1463, zook2019giab}:
+three-generation pedigree, obtained from the Genome in a Bottle (GIAB)
+project~\cite{zook2019giab} and the 1000 Genomes Project~\cite{1000genomes2015}.
+The six individuals are:
 
 \begin{pedigree}
 \begin{verbatim}
-    Pat.GF --- Pat.GM       Mat.GF --- Mat.GM
-         |                       |
-       Father  -------- Mother
+  NA12889 (Pat.GF) ---+--- NA12890 (Pat.GM)
+                       |
+                    NA12877 (Father) ----+---- NA12878 (Mother)
+                                         |
+                    NA12891 (Mat.GF) ---+--- NA12892 (Mat.GM)
 \end{verbatim}
 \end{pedigree}
 
-\noindent The six individuals yield $\binom{6}{2} = 15$ pairwise
-comparisons, of which four are known parent--child (first-degree)
-relationships and the remainder are in-law or unrelated pairs.
+\ymarginnote{6 individuals, 10 pairs, 4 parent--child, 2 in-law, 4 unrelated.}
 
-\subsection{Module Extraction}
+\noindent The six individuals yield $\binom{6}{2} = 15$ pairwise comparisons.
+Of these, we evaluate the 10 pairs involving at least one grandparent, which
+include:
 
-For each sample, we extract k-mers at $k = 31$ using a Rabin--Karp rolling
-hash~\cite{ondov2016mash} and build a k-mer frequency index.  From this
-index we identify \emph{informative modules}: connected components of k-mers
-that co-occur in windows of 500\,bp and whose frequency deviates from the
-genome-wide background by more than two standard deviations.
+\begin{itemize}
+  \item \textbf{4 parent--child pairs:}  Mat.GF~$\to$~Mother,
+        Mat.GM~$\to$~Mother, Pat.GM~$\to$~Father, Pat.GF~$\to$~Father.
+  \item \textbf{2 in-law pairs:}  Mat.GF~$\leftrightarrow$~Father,
+        Pat.GF~$\leftrightarrow$~Mother.
+  \item \textbf{4 unrelated pairs:}  Pat.GM~$\leftrightarrow$~Mat.GM,
+        Spouses, Pat.GF~$\leftrightarrow$~Mat.GM,
+        Pat.GF~$\leftrightarrow$~Mat.GF.
+\end{itemize}
+
+All samples are Illumina short-read whole-genome sequencing at approximately
+$30\times$ coverage.  Reads are processed directly from FASTQ files without
+any alignment or variant calling.
+
+\subsection{Motif Extraction}
+
+The first stage extracts frequent k-mers (``motifs'') from each sample's raw
+reads.
 
 \begin{definition}
-A \textbf{module} $m$ is a set of k-mers $\{h_1, h_2, \ldots, h_n\}$ that
-form a connected component in the windowed co-occurrence graph.  Two k-mers
-share an edge if they appear within the same 500\,bp window in at least two
-distinct reads.
+A \textbf{motif} is a canonical k-mer (the lexicographically smaller of a k-mer
+and its reverse complement) that appears in at least \texttt{minSupport} reads
+within a sample.  We use $k = 15$ and \texttt{minSupport} $= 3$.
 \end{definition}
 
-Each sample $X$ thus produces a module set $M_X$ with associated edge set
-$E_X$ and a spectral signature vector $\mathbf{s}_X$ capturing the
-frequency distribution across modules.
+\noindent For each sample, we:
 
-\subsection{Shared Vocabulary}
-
-Given two samples $A$ and $B$, we compute:
-
-\begin{enumerate}[leftmargin=2em]
-  \item \textbf{Module Jaccard.}  The fraction of modules shared between
-        the two samples:
+\begin{enumerate}
+  \item Stream through all reads in the FASTQ file.
+  \item Extract every 15-mer using a Rabin--Karp rolling
+        hash~\cite{karp1987rabin} with parameters:
         \begin{equation}
-          J_M(A, B) = \frac{|M_A \cap M_B|}{|M_A \cup M_B|}
-          \label{eq:module-jaccard}
+          h(s) = \sum_{i=0}^{k-1} 31^i \cdot \text{encode}(s_i)
+                 \mod (2^{61} - 1)
+          \label{eq:rolling-hash}
         \end{equation}
-        where $|M_A \cap M_B|$ counts informative modules present in both
-        samples and $|M_A \cup M_B|$ is the total number of distinct modules
-        observed across the pair.
-
-  \item \textbf{Edge overlap.}  The fraction of graph edges from one sample
-        that are also present in the other:
-        \begin{equation}
-          J_E(A, B) = \frac{|E_A \cap E_B|}{|E_A \cup E_B|}
-          \label{eq:edge-overlap}
-        \end{equation}
-
-  \item \textbf{Spectral cosine.}  The cosine similarity between the
-        module-frequency signature vectors:
-        \begin{equation}
-          \cos(\mathbf{s}_A, \mathbf{s}_B)
-            = \frac{\mathbf{s}_A \cdot \mathbf{s}_B}
-                   {\|\mathbf{s}_A\| \; \|\mathbf{s}_B\|}
-          \label{eq:cosine}
-        \end{equation}
+        where $\text{encode}(\texttt{A}) = 0$, $\text{encode}(\texttt{C}) = 1$,
+        $\text{encode}(\texttt{G}) = 2$, $\text{encode}(\texttt{T}) = 3$.
+  \item Canonicalize each k-mer by computing both the forward and reverse
+        complement hashes and selecting the smaller.
+  \item Filter low-complexity k-mers (those with $\geq 80\%$ single-base
+        content).
+  \item Count occurrences and retain motifs with count $\geq 3$.
 \end{enumerate}
 
-\subsection{Combined Score}
+\ymarginnote{$\sim$2.9M frequent motifs per sample out of $\sim$5M total distinct 15-mers.}
 
-The three components are combined into a composite relatedness score with
-empirically tuned weights:
+Each sample produces approximately 2.9 million frequent motifs out of
+approximately 5 million total distinct 15-mers.  The frequent motif set
+represents the ``vocabulary'' of that sample.
+
+\subsection{Co-occurrence Counting}
+
+The second stage identifies pairs of motifs that co-occur within genomic
+windows.
+
+\begin{definition}
+Two motifs \textbf{co-occur} if they both appear within a sliding window of
+\texttt{windowSize} $= 50$\,bp on the same read.  The co-occurrence count for
+a pair $(m_i, m_j)$ is the number of distinct reads in which they co-occur.
+\end{definition}
+
+\noindent We scan each read with a sliding window of 50\,bp.  For each
+window, we extract all frequent motifs and increment the co-occurrence count
+for every pair.  To control memory, we use a fixed-size hash table with
+$2^{24} = 16{,}777{,}216$ entries (128\,MB cap).  When the table is full, the
+least-frequent pair is evicted.
+
+The window size of 50\,bp was chosen to balance two competing concerns:
+smaller windows capture tighter spatial relationships (higher specificity) but
+produce sparser co-occurrence graphs; larger windows capture more pairs but
+include more noise from unrelated k-mers that happen to fall on the same read.
+
+\subsection{Module Discovery}
+
+The third stage groups co-occurring motifs into modules using connected
+component analysis.
+
+\begin{definition}
+A \textbf{module} $m = \{h_1, h_2, \ldots, h_n\}$ is a connected component
+in the co-occurrence graph, where vertices are motifs and edges connect motifs
+with co-occurrence count $\geq$~\texttt{minSupport}.  Only modules with
+\textbf{cohesion} $\geq 0.3$ are retained, where cohesion is defined as:
+\begin{equation}
+  \text{cohesion}(m) = \frac{|E_m|}{\binom{|m|}{2}}
+  \label{eq:cohesion}
+\end{equation}
+i.e., the fraction of possible intra-module edges that actually exist.
+\end{definition}
+
+Connected components are extracted using a standard union-find algorithm.
+Components with fewer than 3 or more than 50 members are discarded: very small
+components carry little structural information, and very large components are
+typically artifacts of repetitive regions.
+
+The cohesion threshold of $0.3$ ensures that retained modules have meaningful
+internal structure---at least 30\% of all possible internal edges exist---rather
+than being loose collections of barely-connected motifs.
+
+\subsection{Shared Vocabulary Construction}
+
+\ymarginnote{The shared vocabulary is the union of all per-sample modules, deduplicated by fingerprint.}
+
+Given modules from all six samples, we construct a shared vocabulary by taking
+the union of all per-sample module sets.  To identify identical modules across
+samples, we compute a fingerprint for each module: the sorted hash values of
+its member motifs, further hashed into a single 64-bit value.  Modules with
+identical fingerprints are deduplicated, retaining only one representative.
+
+The result is a single vocabulary $\mathcal{V}$ of distinct modules.  For each
+sample $X$, we record which vocabulary modules are present (i.e., have a
+matching fingerprint in $X$'s module set).
+
+\subsection{Informative Module Filtering}
+
+Not all modules in the shared vocabulary carry relatedness signal.  Modules
+that are present in all six samples are population-common and provide no
+discrimination.  We exclude these:
+
+\begin{definition}
+A module $v \in \mathcal{V}$ is \textbf{informative} if it is present in
+at least 1 but fewer than all 6 samples.  The informative vocabulary is
+$\mathcal{V}_{\text{info}} = \{v \in \mathcal{V} : 1 \leq |S_v| < 6\}$,
+where $S_v$ is the set of samples containing module $v$.
+\end{definition}
+
+This filtering step is critical.  In our data, the top-scoring parent--child
+pair (Mat.GF~$\to$~Mother) has 162 out of 2446 modules (6.6\%) classified as
+informative.  The informative fraction is the single most discriminative
+feature between related and unrelated pairs.
+
+\subsection{Module Graph Construction}
+
+For each sample, we construct a module-level graph where:
+
+\begin{itemize}
+  \item \textbf{Vertices} are the modules from the shared vocabulary that are
+        present in the sample.
+  \item \textbf{Edges} connect modules whose member motifs co-occur (i.e.,
+        at least one motif from module $A$ co-occurs with at least one motif
+        from module $B$ within the 50\,bp window).
+\end{itemize}
+
+The edge set $E_X$ for sample $X$ is determined by scanning all reads in $X$
+and checking which module pairs have inter-module motif co-occurrence.  This
+produces a rich graph structure that captures higher-order relationships between
+modules.
+
+\subsection{Three-Component Scoring}
+\label{sec:scoring}
+
+Given two samples $A$ and $B$, we compute three similarity measures and combine
+them into a single composite score:
+
+\subsubsection{Module Jaccard ($J_M$)}
+
+The fraction of informative modules shared between the two samples:
+
+\begin{equation}
+  J_M(A, B) = \frac{|\mathcal{V}_{\text{info}}^A \cap \mathcal{V}_{\text{info}}^B|}
+                    {|\mathcal{V}_{\text{info}}^A \cup \mathcal{V}_{\text{info}}^B|}
+  \label{eq:module-jaccard}
+\end{equation}
+
+\noindent where $\mathcal{V}_{\text{info}}^X$ is the set of informative modules
+present in sample $X$.
+
+\subsubsection{Edge Jaccard ($J_E$)}
+
+The fraction of graph edges shared between the two samples:
+
+\begin{equation}
+  J_E(A, B) = \frac{|E_A \cap E_B|}{|E_A \cup E_B|}
+  \label{eq:edge-jaccard}
+\end{equation}
+
+\noindent where $E_X$ is the edge set of sample $X$'s module graph.
+
+\subsubsection{Spectral Cosine ($\cos$)}
+
+Each sample $X$ has a module-frequency signature vector $\mathbf{s}_X$, where
+each dimension corresponds to a module in $\mathcal{V}_{\text{info}}$ and the
+value is the count of reads containing that module.  The cosine similarity is:
+
+\begin{equation}
+  \cos(\mathbf{s}_A, \mathbf{s}_B)
+    = \frac{\mathbf{s}_A \cdot \mathbf{s}_B}
+           {\|\mathbf{s}_A\| \; \|\mathbf{s}_B\|}
+  \label{eq:cosine}
+\end{equation}
+
+\subsubsection{Composite Score}
+
+The three components are combined with empirically tuned weights:
 
 \begin{equation}
   S(A, B) = 0.3 \, J_M(A,B) + 0.4 \, J_E(A,B) + 0.3 \, \cos(\mathbf{s}_A, \mathbf{s}_B)
   \label{eq:combined}
 \end{equation}
 
-\noindent The edge overlap term receives the highest weight because it
-proved most stable across coverage depths in preliminary experiments.
+\noindent The edge overlap term receives the highest weight ($0.4$) because it
+proved most stable across coverage depths in preliminary experiments.  The
+module Jaccard and cosine terms each receive $0.3$, providing complementary
+signals: $J_M$ captures discrete module sharing while $\cos$ captures
+continuous frequency patterns.
 
-% ────────────────────────────────────────────────────────────────
+\subsection{Evaluation Metrics}
+
+We define two primary evaluation metrics:
+
+\begin{definition}
+The \textbf{separation} is the difference between the mean score for related
+pairs and the mean score for unrelated pairs, expressed as a percentage:
+\begin{equation}
+  \text{Sep} = \bar{S}_{\text{rel}} - \bar{S}_{\text{unrel}}
+  \label{eq:separation}
+\end{equation}
+\end{definition}
+
+\begin{definition}
+The \textbf{weakest gap} is the difference between the lowest-scoring related
+pair and the highest-scoring unrelated (or in-law) pair:
+\begin{equation}
+  \Delta_{\min} = \min_{(i,j) \in \text{rel}} S(i,j)
+                  - \max_{(i,j) \in \text{unrel}} S(i,j)
+  \label{eq:weakest-gap}
+\end{equation}
+A positive weakest gap means all related pairs score above all unrelated pairs;
+a negative gap means at least one unrelated pair ``leaks'' into the related
+range.
+\end{definition}
+
+A method achieves \textbf{perfect classification} if and only if
+$\Delta_{\min} > 0$.  The stricter metric is the weakest gap; mean separation
+can be positive even when classification fails.
+
+\subsection{Implementation}
+
+The entire pipeline is implemented in TypeScript running on the Bun runtime
+(version~1.1+).  All code is part of the yalumba monorepo, with the relevant
+packages being:
+
+\begin{itemize}
+  \item \texttt{@yalumba/fastq} --- streaming FASTQ parser
+  \item \texttt{@yalumba/genome} --- 2-bit DNA encoding
+  \item \texttt{@yalumba/kmer} --- k-mer extraction and rolling hash
+  \item \texttt{@yalumba/alignment} --- Jaccard and cosine similarity
+  \item \texttt{@yalumba/relatedness} --- module extraction and scoring
+  \item \texttt{@yalumba/math} --- bitset operations, popcount, statistics
+  \item \texttt{@yalumba/io} --- chunked file reading and buffer pools
+\end{itemize}
+
+\ymarginnote{No external bioinformatics libraries. Every algorithm from scratch.}
+
+No external bioinformatics libraries are used.  Every parser, algorithm, and
+data structure is implemented from scratch, consistent with the yalumba
+project's foundational constraint.  The k-mer rolling hash uses BigInt
+arithmetic to avoid precision loss on 61-bit Mersenne-prime hashes.  Typed
+arrays (\texttt{Uint32Array}, \texttt{Float64Array}) are used throughout for
+cache-friendly bulk data processing.
+
+Timing is measured using \texttt{performance.now()} with microsecond precision.
+Memory is tracked via Bun's \texttt{process.memoryUsage()} API, recording heap
+size before and after each pipeline stage.
+
+
+% ════════════════════════════════════════════════════════════════════
 \section{Results}
 \label{sec:results}
 
+\subsection{Module Extraction Statistics}
+
+Table~\ref{tab:extraction} summarizes the module extraction results for each
+of the six samples.
+
+\begin{table}[htbp]
+\centering
+\tablestyle
+\caption{Module extraction statistics per sample.  Frequent motifs are
+  canonical 15-mers appearing in $\geq 3$ reads.  Modules are connected
+  components with cohesion $\geq 0.3$.}
+\label{tab:extraction}
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Sample}} &
+\textcolor{white}{\textbf{Frequent Motifs}} &
+\textcolor{white}{\textbf{Motif Pairs Tracked}} &
+\textcolor{white}{\textbf{Modules}} \\
+\midrule
+NA12877 (Father) & $\sim$2.9M & varies & varies \\
+NA12878 (Mother) & $\sim$2.9M & varies & varies \\
+NA12889 (Pat.GF) & $\sim$2.9M & varies & varies \\
+NA12890 (Pat.GM) & $\sim$2.9M & varies & varies \\
+NA12891 (Mat.GF) & $\sim$2.9M & varies & varies \\
+NA12892 (Mat.GM) & $\sim$2.9M & varies & varies \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent Each sample produces approximately 2.9 million frequent motifs from
+a total of approximately 5 million distinct 15-mers (58\% retention rate after
+the support threshold).  The motif pair count varies by sample due to
+differences in read length distribution and coverage uniformity, but is on the
+order of hundreds of millions per sample.  The fixed-size hash table
+(16M entries, 128\,MB cap) handles this by evicting low-count pairs as the
+table fills.
+
 \subsection{Full Score Table}
 
-Table~\ref{tab:scores} presents the v2 module-persistence scores for all
-ten pairs involving at least one grandparent.
+Table~\ref{tab:scores} presents the complete v2 module-persistence scores for
+all ten evaluated pairs.
 
 \begin{table}[htbp]
 \centering
 \tablestyle
 \caption{Module-persistence v2 scores on the CEPH~1463 pedigree.
   Pairs are sorted by descending composite score~$S$.
-  \emph{infoMod}: informative modules; \emph{edges}: shared graph edges;
-  \emph{cosine}: spectral cosine similarity.}
+  \emph{infoMod}: informative module fraction;
+  \emph{Edges}: shared graph-edge fraction;
+  \emph{Cosine}: spectral cosine similarity.
+  Dashes indicate values not recorded for pairs where the
+  component breakdown was not logged.}
 \label{tab:scores}
 \begin{tabular}{@{}llcccc@{}}
 \toprule
@@ -159,155 +635,764 @@ ten pairs involving at least one grandparent.
 \textcolor{white}{\textbf{Edges}} &
 \textcolor{white}{\textbf{Cosine}} \\
 \midrule
-Mat.GF $\to$ Mother    & parent--child & 0.4206 & 6.6\% & 89.2\% & 0.1461 \\
-Mat.GM $\to$ Mother    & parent--child & 0.4130 & 5.1\% & 88.3\% & 0.1478 \\
-Pat.GM $\to$ Father    & parent--child & 0.3760 & 2.9\% & 86.2\% & 0.0758 \\
-Mat.GF $\leftrightarrow$ Father  & in-law    & 0.3741 & 2.6\% & 86.4\% & 0.0693 \\
-Pat.GM $\leftrightarrow$ Mat.GM  & unrelated & 0.3703 & ---   & ---    & ---    \\
-Spouses                          & unrelated & 0.3700 & ---   & ---    & ---    \\
-Pat.GF $\to$ Father    & parent--child & 0.3424 & ---   & ---    & ---    \\
-Pat.GF $\leftrightarrow$ Mat.GM  & unrelated & 0.3312 & ---   & ---    & ---    \\
-Pat.GF $\leftrightarrow$ Mother  & in-law    & 0.3002 & ---   & ---    & ---    \\
-Pat.GF $\leftrightarrow$ Mat.GF  & unrelated & 0.2966 & ---   & ---    & ---    \\
+Mat.GF $\to$ Mother    & parent--child & 0.420583 & 162/2446 (6.6\%) & 3633/4072 (89.2\%) & 0.1461 \\
+Mat.GM $\to$ Mother    & parent--child & 0.413023 & 123/2391 (5.1\%) & 3643/4125 (88.3\%) & 0.1478 \\
+Pat.GM $\to$ Father    & parent--child & 0.376016 & 70/2439 (2.9\%)  & 3676/4266 (86.2\%) & 0.0758 \\
+Mat.GF $\leftrightarrow$ Father  & in-law    & 0.374120 & 60/2293 (2.6\%)  & 3630/4203 (86.4\%) & 0.0693 \\
+Pat.GM $\leftrightarrow$ Mat.GM  & unrelated & 0.370269 & ---   & ---    & ---    \\
+Spouses                          & unrelated & 0.370005 & ---   & ---    & ---    \\
+Pat.GF $\to$ Father    & parent--child & 0.342385 & ---   & ---    & ---    \\
+Pat.GF $\leftrightarrow$ Mat.GM  & unrelated & 0.331190 & ---   & ---    & ---    \\
+Pat.GF $\leftrightarrow$ Mother  & in-law    & 0.300230 & ---   & ---    & ---    \\
+Pat.GF $\leftrightarrow$ Mat.GF  & unrelated & 0.296632 & ---   & ---    & ---    \\
 \bottomrule
 \end{tabular}
 \end{table}
 
+\subsection{Score Ranking}
+
+Figure~\ref{fig:ranking} shows the scores in ranked order with relationship
+labels.  The color coding reveals the structure: green bars for parent--child
+pairs, amber for in-law pairs, and gray for unrelated pairs.
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  bar/.style={minimum height=0.45cm, anchor=west, draw=none},
+  label/.style={anchor=east, font=\sffamily\footnotesize},
+  score/.style={anchor=west, font=\sffamily\footnotesize\color{text-muted}},
+]
+  % Y positions (top to bottom)
+  \def\ygap{0.65}
+  % Bars (width = score * 18)
+  \node[bar, fill=dna-A!70, minimum width=0.420583*18 cm] at (0, -0*\ygap) {};
+  \node[label] at (-0.15, -0*\ygap) {\footnotesize Mat.GF $\to$ Mother};
+  \node[score] at (0.420583*18+0.15, -0*\ygap) {0.4206};
+
+  \node[bar, fill=dna-A!70, minimum width=0.413023*18 cm] at (0, -1*\ygap) {};
+  \node[label] at (-0.15, -1*\ygap) {\footnotesize Mat.GM $\to$ Mother};
+  \node[score] at (0.413023*18+0.15, -1*\ygap) {0.4130};
+
+  \node[bar, fill=dna-A!70, minimum width=0.376016*18 cm] at (0, -2*\ygap) {};
+  \node[label] at (-0.15, -2*\ygap) {\footnotesize Pat.GM $\to$ Father};
+  \node[score] at (0.376016*18+0.15, -2*\ygap) {0.3760};
+
+  \node[bar, fill=dna-G!70, minimum width=0.374120*18 cm] at (0, -3*\ygap) {};
+  \node[label] at (-0.15, -3*\ygap) {\footnotesize Mat.GF $\leftrightarrow$ Father};
+  \node[score] at (0.374120*18+0.15, -3*\ygap) {0.3741};
+
+  \node[bar, fill=text-muted!40, minimum width=0.370269*18 cm] at (0, -4*\ygap) {};
+  \node[label] at (-0.15, -4*\ygap) {\footnotesize Pat.GM $\leftrightarrow$ Mat.GM};
+  \node[score] at (0.370269*18+0.15, -4*\ygap) {0.3703};
+
+  \node[bar, fill=text-muted!40, minimum width=0.370005*18 cm] at (0, -5*\ygap) {};
+  \node[label] at (-0.15, -5*\ygap) {\footnotesize Spouses};
+  \node[score] at (0.370005*18+0.15, -5*\ygap) {0.3700};
+
+  \node[bar, fill=dna-A!70, minimum width=0.342385*18 cm] at (0, -6*\ygap) {};
+  \node[label] at (-0.15, -6*\ygap) {\footnotesize Pat.GF $\to$ Father};
+  \node[score] at (0.342385*18+0.15, -6*\ygap) {0.3424};
+
+  \node[bar, fill=text-muted!40, minimum width=0.331190*18 cm] at (0, -7*\ygap) {};
+  \node[label] at (-0.15, -7*\ygap) {\footnotesize Pat.GF $\leftrightarrow$ Mat.GM};
+  \node[score] at (0.331190*18+0.15, -7*\ygap) {0.3312};
+
+  \node[bar, fill=dna-G!70, minimum width=0.300230*18 cm] at (0, -8*\ygap) {};
+  \node[label] at (-0.15, -8*\ygap) {\footnotesize Pat.GF $\leftrightarrow$ Mother};
+  \node[score] at (0.300230*18+0.15, -8*\ygap) {0.3002};
+
+  \node[bar, fill=text-muted!40, minimum width=0.296632*18 cm] at (0, -9*\ygap) {};
+  \node[label] at (-0.15, -9*\ygap) {\footnotesize Pat.GF $\leftrightarrow$ Mat.GF};
+  \node[score] at (0.296632*18+0.15, -9*\ygap) {0.2966};
+
+  % Threshold line (approximate)
+  \draw[dashed, dna-T, thick] (0.356*18, 0.4) -- (0.356*18, -9*\ygap - 0.4)
+    node[below, font=\sffamily\tiny\color{dna-T}] {ideal threshold};
+
+  % Legend
+  \node[anchor=west, font=\sffamily\tiny] at (0, -10*\ygap-0.1)
+    {\textcolor{dna-A!70}{$\blacksquare$} parent--child \quad
+     \textcolor{dna-G!70}{$\blacksquare$} in-law \quad
+     \textcolor{text-muted!40}{$\blacksquare$} unrelated};
+\end{tikzpicture}
+\caption{Score ranking for all 10 evaluated pairs.  The dashed red line
+  shows where an ideal classification threshold would fall; the overlap
+  between Pat.GF~$\to$~Father (rank 7) and Mat.GF~$\leftrightarrow$~Father
+  (rank 4) prevents clean separation.}
+\label{fig:ranking}
+\end{figure}
+
 \subsection{Separation Analysis}
 
 \begin{keyfinding}
-The average score for parent--child pairs is $\bar{S}_{\text{rel}} = 0.3880$
-compared to $\bar{S}_{\text{unrel}} = 0.3404$ for unrelated pairs, yielding a
-separation of $+4.76$ percentage points.  The scorer correctly ranks the two
-strongest parent--child pairs (maternal grandparents $\to$ Mother) above all
-unrelated pairs.
+The average score for the four parent--child pairs is
+$\bar{S}_{\text{rel}} = 0.388002$ compared to
+$\bar{S}_{\text{unrel}} = 0.340408$ for the six unrelated/in-law pairs,
+yielding a separation of $+4.7594$ percentage points.
+The scorer correctly ranks the two strongest parent--child pairs
+(maternal grandparents $\to$ Mother) above all unrelated pairs, with a clear
+gap of 4.3 percentage points between Mat.GM~$\to$~Mother (0.4130) and the
+highest-scoring unrelated pair, Pat.GM~$\leftrightarrow$~Mat.GM (0.3703).
 \end{keyfinding}
 
-However, the separation is not clean.  The weakest gap---defined as the
-difference between the lowest-scoring related pair and the highest-scoring
-unrelated pair---is \emph{negative}:
+The separation is positive and meaningful: the v2 scorer produces a 14.0\%
+relative difference between the two group means
+($0.0476 / 0.3404 = 14.0\%$).  However, mean separation alone is insufficient
+for classification; we need the weakest gap to be positive.
+
+\subsection{The Weakest Gap Problem}
+
+The weakest gap is defined as the difference between the lowest-scoring
+related pair and the highest-scoring non-related pair:
 
 \begin{equation}
-  \Delta_{\min} = S(\text{Pat.GF} \to \text{Father}) - S(\text{Mat.GF} \leftrightarrow \text{Father})
-               = 0.3424 - 0.3741 = -0.0317
+  \Delta_{\min} = S(\text{Pat.GF} \to \text{Father})
+                  - S(\text{Mat.GF} \leftrightarrow \text{Father})
+               = 0.342385 - 0.374120 = -0.031735
 \end{equation}
 
 \begin{limitation}
-The in-law pair Mat.GF $\leftrightarrow$ Father scores 0.3741, which is
-\emph{higher} than the parent--child pair Pat.GF $\to$ Father at 0.3424.
-This overlap means a simple threshold cannot perfectly separate related from
-unrelated pairs in this dataset.
+The weakest gap is $-3.1735$ percentage points.  The in-law pair
+Mat.GF~$\leftrightarrow$~Father scores $0.3741$, which is \emph{higher} than
+the parent--child pair Pat.GF~$\to$~Father at $0.3424$.  This means no
+single threshold can perfectly separate related from unrelated pairs in this
+dataset.
 \end{limitation}
 
-\subsection{Component Contributions}
+The negative weakest gap is driven by two simultaneous effects:
 
-The three score components contribute differently across relationship types:
+\begin{enumerate}
+  \item \textbf{Pat.GF scores anomalously low.}  All four pairs involving
+        Pat.GF (NA12889) are in the bottom half of the ranking.  Even the
+        true parent--child pair Pat.GF~$\to$~Father ranks 7th out of 10.
+  \item \textbf{Mat.GF~$\leftrightarrow$~Father is inflated.}  This in-law
+        pair scores 0.3741, higher than the third-ranked parent--child pair
+        Pat.GM~$\to$~Father (0.3760) by only 0.19 percentage points.  The
+        inflation is likely due to shared population structure in the European
+        ancestry background~\cite{ralph2013ancestry}.
+\end{enumerate}
 
-\begin{itemize}[leftmargin=2em]
-  \item \textbf{Informative modules} (6.6\% and 5.1\% for maternal pairs)
-        are the most discriminative feature for strong parent--child pairs,
-        but drop to 2.9\% for Pat.GM $\to$ Father and as low as 2.6\% for
-        the in-law pair that causes the overlap.
-  \item \textbf{Edge fraction} is high across all pairs (86--89\%), providing
-        a stable but weakly discriminative baseline.
-  \item \textbf{Cosine similarity} shows a clear split: maternal pairs
-        achieve $\approx 0.15$ while paternal and unrelated pairs fall below
-        $0.08$, suggesting that spectral features capture maternal-lineage
-        sharing more effectively.
+\subsection{Component Contribution Analysis}
+
+The three score components contribute differently across relationship types.
+Table~\ref{tab:components} breaks down the contributions for the four pairs
+where full component data was recorded.
+
+\begin{table}[htbp]
+\centering
+\tablestyle
+\caption{Component contributions for pairs with full breakdown data.
+  Values are raw component values (before weighting).}
+\label{tab:components}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Pair}} &
+\textcolor{white}{\textbf{infoMod \%}} &
+\textcolor{white}{\textbf{Edge \%}} &
+\textcolor{white}{\textbf{Cosine}} \\
+\midrule
+Mat.GF $\to$ Mother (PC)        & 6.6\% & 89.2\% & 0.1461 \\
+Mat.GM $\to$ Mother (PC)        & 5.1\% & 88.3\% & 0.1478 \\
+Pat.GM $\to$ Father (PC)        & 2.9\% & 86.2\% & 0.0758 \\
+Mat.GF $\leftrightarrow$ Father (IL) & 2.6\% & 86.4\% & 0.0693 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Several patterns emerge:
+
+\begin{itemize}
+  \item \textbf{Informative modules are the most discriminative component.}
+        The maternal parent--child pairs have 6.6\% and 5.1\% informative
+        module fractions, well above the in-law pair's 2.6\%.  The gap between
+        the paternal pair (2.9\%) and the in-law pair (2.6\%) is only 0.3
+        percentage points---too narrow for confident separation.
+
+  \item \textbf{Edge fraction is a stable but non-discriminative baseline.}
+        Edge fractions range from 86.2\% to 89.2\% across all four pairs,
+        a spread of only 3.0 percentage points.  This component provides a
+        high baseline but contributes little to ranking differentiation.
+
+  \item \textbf{Cosine similarity captures maternal-lineage signal.}
+        The two maternal pairs achieve cosine values of $\sim$0.15, nearly
+        double the paternal pair (0.0758) and the in-law pair (0.0693).  This
+        suggests that the module-frequency spectrum carries genuine haplotype
+        sharing signal, but primarily for maternal lineage in this dataset.
 \end{itemize}
 
-\subsection{Computational Performance}
+\subsection{v1 vs.\ v2 Comparison}
 
-Preprocessing (k-mer extraction, module construction, signature computation)
-required $1084.6$\,s per sample on a single core.  Once signatures are
-computed, pairwise comparison is effectively instantaneous ($< 0.01$\,s per
-pair), confirming that the method's cost is front-loaded in the
-extraction phase.
+Table~\ref{tab:v1v2} compares the v1 (raw k-mer Jaccard) and v2
+(module-persistence) scores for the five pairs that were evaluated in both
+versions.
 
-% ────────────────────────────────────────────────────────────────
+\begin{table}[htbp]
+\centering
+\tablestyle
+\caption{Score comparison between v1 (raw k-mer Jaccard) and v2
+  (module persistence).  v1 scores are orders of magnitude lower because
+  they measure raw Jaccard overlap without module extraction.}
+\label{tab:v1v2}
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Pair}} &
+\textcolor{white}{\textbf{v1 Score}} &
+\textcolor{white}{\textbf{v2 Score}} &
+\textcolor{white}{\textbf{Rank Change}} \\
+\midrule
+Mat.GF $\to$ Mother  & 0.065362 & 0.420583 & 1 $\to$ 1 \\
+Mat.GM $\to$ Mother  & 0.025797 & 0.413023 & 3 $\to$ 2 \\
+Pat.GM $\to$ Father  & 0.025952 & 0.376016 & 2 $\to$ 3 \\
+Spouses              & 0.025026 & 0.370005 & 4 $\to$ 6 \\
+Pat.GF $\to$ Father  & 0.020189 & 0.342385 & 5 $\to$ 7 \\
+\midrule
+\multicolumn{2}{@{}l}{\textbf{Separation}} & & \\
+\quad v1 & $+2.02\%$ & & \\
+\quad v2 & $+4.76\%$ & & \\
+\midrule
+\multicolumn{2}{@{}l}{\textbf{Weakest gap}} & & \\
+\quad v1 & $-0.48\%$ & & \\
+\quad v2 & $-3.17\%$ & & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{keyfinding}
+The v2 module-persistence scorer improves mean separation by 2.4$\times$ over
+v1 ($+4.76\%$ vs.\ $+2.02\%$).  Mat.GF~$\to$~Mother remains the
+top-ranked pair in both versions.  However, the weakest gap is worse in v2
+($-3.17\%$ vs.\ $-0.48\%$), because the expanded feature set inflates
+in-law scores more than it improves weak parent--child scores.
+\end{keyfinding}
+
+The v1 scores cluster tightly around 0.02--0.07 with very small absolute
+differences, making the separation fragile despite the smaller negative gap.
+The v2 scores span a wider range (0.30--0.42), providing more room for
+classification in principle but also more room for anomalous pairs to cause
+overlap.
+
+\subsection{Comparison to Rare-Run P90 Baseline}
+
+Table~\ref{tab:baseline} compares the v2 module-persistence approach to the
+Rare-Run P90 baseline (experiment~38), which detects contiguous runs of shared
+rare k-mers along reads.
+
+\begin{table}[htbp]
+\centering
+\tablestyle
+\caption{Comparison of v2 module persistence to the Rare-Run P90 baseline.}
+\label{tab:baseline}
+\begin{tabular}{@{}lcc@{}}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Metric}} &
+\textcolor{white}{\textbf{Rare-Run P90}} &
+\textcolor{white}{\textbf{v2 Module}} \\
+\midrule
+Separation          & $+583\%$  & $+4.76\%$  \\
+Weakest gap         & positive (all detected) & $-3.17\%$ \\
+Pass rate           & 4/4 pairs & 3/4 pairs  \\
+Prep time           & 72.5\,s   & 1084.6\,s  \\
+Compare time (pair) & 11.5\,s   & $<0.01$\,s \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{limitation}
+The Rare-Run P90 baseline achieves $+583\%$ separation with all four
+parent--child pairs correctly detected, while v2 module persistence achieves
+only $+4.76\%$ separation with one pair misclassified.  The run-length
+approach is currently far superior for classification, though at the cost
+of 11.5\,s per comparison versus effectively instantaneous comparison for
+module persistence.
+\end{limitation}
+
+The key difference is that Rare-Run P90 operates at the read level, detecting
+long contiguous stretches of shared rare k-mers that directly correspond to
+IBD segments.  Module persistence operates at a higher level of abstraction
+(modules as bags of co-occurring k-mers), which trades positional information
+for structural richness.  The results show that positional information is
+currently more valuable for relatedness detection.
+
+\subsection{Timing Breakdown}
+
+Table~\ref{tab:timing} presents the detailed timing breakdown for the v2
+pipeline.
+
+\begin{table}[htbp]
+\centering
+\tablestyle
+\caption{Timing breakdown for the v2 module-persistence pipeline.
+  All times measured on a single core.}
+\label{tab:timing}
+\begin{tabular}{@{}lrr@{}}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Stage}} &
+\textcolor{white}{\textbf{Total Time}} &
+\textcolor{white}{\textbf{Per-Unit Time}} \\
+\midrule
+Data loading (6 samples)     & 20.3\,s   & $\sim$3.4\,s / sample \\
+Module extraction (prep)     & 1084.6\,s & $\sim$180\,s / sample \\
+Pairwise comparison (10 pairs) & $<0.1$\,s & $<0.01$\,s / pair   \\
+\midrule
+\textbf{Total wall-clock}   & \textbf{1104.9\,s} & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\ymarginnote{98\% of runtime is module extraction. Compare is free.}
+
+The pipeline is overwhelmingly dominated by the module extraction phase, which
+accounts for 98.2\% of total wall-clock time.  Data loading (FASTQ parsing and
+streaming) adds only 20.3\,s (1.8\%).  Pairwise comparison is effectively
+free---this is by design, as the module-persistence framework front-loads all
+computation into the preparation phase, after which the $O(n^2)$ pairwise
+comparisons can be performed on precomputed signatures.
+
+The v1 baseline had a similar profile but was faster overall: 685\,s prep time
+(because it skipped module extraction) and 1.0\,s compare time.  The v2
+pipeline pays an additional 400\,s for the module extraction step.
+
+\subsection{Memory Analysis}
+
+Table~\ref{tab:memory} presents the memory profile for the v2 pipeline.
+
+\begin{table}[htbp]
+\centering
+\tablestyle
+\caption{Memory profile for the v2 module-persistence pipeline.}
+\label{tab:memory}
+\begin{tabular}{@{}lr@{}}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Metric}} &
+\textcolor{white}{\textbf{Value}} \\
+\midrule
+Heap before extraction  & 3489.6\,MB \\
+Heap after extraction   & 4805.6\,MB \\
+Delta                   & $+$1316.0\,MB \\
+Fixed hash table        & 128\,MB (16M entries) \\
+Per-sample overhead     & $\sim$219\,MB \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The 1316\,MB delta during extraction is dominated by the co-occurrence hash
+tables and intermediate module representations.  The fixed-size hash table
+(128\,MB) provides a hard cap on the largest single allocation, but each sample
+requires additional memory for motif indices, co-occurrence counts, and union-find
+data structures.
+
+The per-sample overhead of approximately 219\,MB ($1316 / 6$) is significant
+for a single-core TypeScript process and motivates the move to native C
+implementations, which would reduce overhead through more compact data
+structures and explicit memory management.
+
+
+% ════════════════════════════════════════════════════════════════════
 \section{Discussion}
 \label{sec:discussion}
 
-\subsection{What Works}
+\subsection{What Module Topology Captures That K-mers Don't}
 
-The module-persistence framework demonstrates that relatedness signal
-\emph{does} exist in raw reads without any reference alignment.  The
-maternal-lineage pairs (Mat.GF $\to$ Mother, Mat.GM $\to$ Mother) score
-convincingly above all unrelated pairs, with the informative-module fraction
-and cosine similarity both contributing to the separation.  This is
-consistent with the hypothesis that shared haplotype blocks manifest as
-persistent k-mer modules across related individuals~\cite{ralph2013ancestry,
-gusev2009germline}.
+Individual k-mers are context-free tokens: the k-mer \dnaseq{ATCGATCGATCGATC}
+carries the same information whether it appears on chromosome 1 or chromosome 22,
+in an exon or an intron, near other shared k-mers or in isolation.  Modules
+restore context by encoding which k-mers co-occur within a genomic window.
+This co-occurrence structure reflects the underlying haplotype block
+architecture: k-mers within the same inherited block will consistently co-occur
+across reads, while k-mers from different blocks will not.
 
-The near-zero comparison time ($< 0.01$\,s per pair) after preprocessing
-makes the method practical for large cohort studies where $O(n^2)$ pairwise
-comparisons are required~\cite{browning2020ibis}.
+The value of this structural information is demonstrated by the informative
+module fraction.  For the strongest pair (Mat.GF~$\to$~Mother), 6.6\% of
+modules are informative---meaning they appear in some but not all samples.
+These informative modules are enriched for family-private haplotype blocks
+that are shared by inheritance rather than by population-level common
+variation.  A raw k-mer approach cannot capture this enrichment because it
+lacks the grouping structure that defines what ``private'' means at the
+module level.
 
-\subsection{What Fails}
+\subsection{Why Maternal Lineage Shows Stronger Signal}
 
-The Pat.GF $\to$ Father pair is the weakest link.  At $S = 0.3424$, it
-falls below the in-law pair Mat.GF $\leftrightarrow$ Father ($S = 0.3741$).
-Several factors may explain this:
+The two maternal pairs (Mat.GF~$\to$~Mother at 0.4206, Mat.GM~$\to$~Mother at
+0.4130) score substantially higher than either paternal pair
+(Pat.GM~$\to$~Father at 0.3760, Pat.GF~$\to$~Father at 0.3424).  The
+asymmetry is consistent and spans all three score components.
 
-\begin{enumerate}[leftmargin=2em]
-  \item \textbf{Coverage asymmetry.}  If Pat.GF has lower effective
-        coverage, fewer informative modules will be detected, reducing the
-        numerator of $J_M$ and the cosine signal.
-  \item \textbf{Population structure.}  The CEPH~1463 family has European
-        ancestry.  Background sharing due to population structure inflates
-        scores for unrelated pairs from the same
-        population~\cite{1000genomes2015}.
-  \item \textbf{Lack of chromosome partitioning.}  The current method treats
-        all k-mers as a single bag.  IBD segments are chromosome-specific;
-        mixing chromosomes dilutes the signal with noise from non-shared
-        chromosomes~\cite{browning2012ibd}.
+Several factors may contribute:
+
+\begin{enumerate}
+  \item \textbf{Coverage differences.}  If the maternal-side samples have
+        higher effective coverage, more motifs will reach the support threshold,
+        producing richer module vocabularies and higher overlap.
+
+  \item \textbf{Haplotype block structure.}  Recombination rates vary across
+        the genome and between sexes~\cite{1000genomes2015}.  If the maternal
+        haplotype blocks in this family are longer (fewer recombination events
+        between grandparents and mother), modules spanning those blocks will
+        be larger and more distinctive.
+
+  \item \textbf{Read quality.}  Systematic differences in library preparation
+        or sequencing quality between the maternal and paternal samples could
+        affect motif extraction rates.
 \end{enumerate}
 
-\subsection{Path Forward}
+\ymarginnote[dna-G]{Maternal pairs: cosine $\sim$0.15. Paternal pairs: cosine $<$0.08.}
 
-Three directions offer the most promise for tightening the separation:
+The cosine similarity component shows the sharpest asymmetry: $\sim$0.15 for
+maternal pairs versus $<$0.08 for paternal and unrelated pairs.  This suggests
+that the module-frequency spectrum is particularly effective at capturing
+maternal-lineage sharing, possibly because the maternal haplotype blocks
+produce more distinctive frequency signatures.
 
-\begin{enumerate}[leftmargin=2em]
-  \item \textbf{Chromosome-aware modules.}  Partitioning k-mers by their
-        likely chromosomal origin (via reference-free read
-        clustering~\cite{ebert2021haplotype}) would allow per-chromosome
-        module comparison, amplifying the IBD signal on shared chromosomes
-        while suppressing noise from unshared ones.
+\subsection{The Pat.GF Problem}
 
-  \item \textbf{Frequency weighting.}  Rare k-mers carry more identity
-        information than common ones~\cite{li2004ncd}.  Weighting the
-        module Jaccard by inverse module frequency (analogous to TF-IDF)
-        should down-weight population-common modules and up-weight
-        family-private ones.
+NA12889 (Pat.GF) is the most problematic sample in our evaluation.  All four
+pairs involving Pat.GF are in the bottom half of the ranking:
 
-  \item \textbf{GPU acceleration.}  The preprocessing bottleneck
-        ($1084.6$\,s per sample) can be addressed through GPU-accelerated
-        k-mer hashing using the existing yalumba SPIR-V
-        pipeline~\cite{liao2025sv}, reducing per-sample time to the order
-        of seconds and enabling iterative parameter tuning.
+\begin{itemize}
+  \item Pat.GF $\to$ Father: 0.3424 (rank 7 of 10, parent--child)
+  \item Pat.GF $\leftrightarrow$ Mat.GM: 0.3312 (rank 8, unrelated)
+  \item Pat.GF $\leftrightarrow$ Mother: 0.3002 (rank 9, in-law)
+  \item Pat.GF $\leftrightarrow$ Mat.GF: 0.2966 (rank 10, unrelated)
+\end{itemize}
+
+The consistent low scoring across all pair types suggests a sample-level
+issue rather than a relationship-specific one.  Possible explanations include:
+
+\begin{enumerate}
+  \item \textbf{Lower effective coverage.}  If Pat.GF's reads have lower
+        average quality or more PCR duplicates, fewer motifs will pass the
+        support threshold, producing a sparser module vocabulary.
+
+  \item \textbf{Population structure.}  If Pat.GF comes from a slightly
+        different population subgroup than the other five samples, its k-mer
+        spectrum will be shifted, reducing overlap with all other samples
+        regardless of biological relatedness.
+
+  \item \textbf{Chromosome mixing.}  The parent--child pair Pat.GF~$\to$~Father
+        shares exactly one copy of each autosome.  Without chromosome
+        partitioning, the signal from the 50\% of chromosomes that \emph{are}
+        shared is diluted by the 50\% that are not.  If Pat.GF's shared
+        chromosomes happen to have shorter haplotype blocks (due to more
+        recombination events), the dilution is worse.
 \end{enumerate}
 
-% ────────────────────────────────────────────────────────────────
+\subsection{Edge Topology: Useful Baseline but Not Discriminative}
+
+The edge Jaccard component ($J_E$) ranges from 86.2\% to 89.2\% across the
+four pairs with full component data---a spread of only 3.0 percentage points.
+This narrow range makes $J_E$ a poor discriminator on its own: it provides a
+stable baseline (most module-level edges are shared across all samples) but
+cannot reliably distinguish related from unrelated pairs.
+
+The high baseline edge sharing is expected: most modules are population-common,
+and the edge structure within population-common modules is largely conserved
+across all samples.  The discriminative signal lives in the edges between
+\emph{informative} modules, which are a small fraction of the total edge set.
+A future refinement could restrict $J_E$ to edges involving at least one
+informative module, potentially sharpening the discriminative power.
+
+\subsection{Informative Module Fraction as the Real Driver}
+
+Among the three score components, the informative module fraction shows the
+widest spread across relationship types:
+
+\begin{itemize}
+  \item Maternal parent--child: 5.1--6.6\%
+  \item Paternal parent--child: 2.9\%
+  \item In-law: 2.6\%
+\end{itemize}
+
+This spread of 4.0 percentage points (6.6\% minus 2.6\%) is larger in
+relative terms than either the edge spread (3.0 pp) or the cosine spread
+($\sim$0.08).  The informative module fraction is the single most useful
+feature for distinguishing related from unrelated pairs in this dataset.
+
+This makes intuitive sense: informative modules are, by definition, the modules
+that vary across samples.  When two related individuals share informative
+modules, those modules are likely inherited from a common ancestor rather than
+shared by population-level common variation.  The more informative modules a
+pair shares, the more likely they are related.
+
+\subsection{Comparison to Classical Methods}
+
+Classical IBD detection methods---GERMLINE~\cite{gusev2009germline},
+Refined IBD~\cite{browning2013refinedibd}, and IBIS~\cite{browning2020ibis}---achieve
+near-perfect classification of first-degree relatives on high-quality WGS data.
+Their advantage is access to chromosomal position: they can identify long
+contiguous segments of IBD that are the hallmark of close relatedness.
+
+Our module-persistence approach lacks positional information entirely.  Modules
+are bags of co-occurring k-mers with no chromosomal coordinates.  This means
+we cannot distinguish a pair that shares one long IBD segment from a pair that
+shares many short population-common segments scattered across the genome.  The
+former indicates relatedness; the latter does not.
+
+The Rare-Run P90 baseline partially recovers positional information by tracking
+contiguous runs of shared rare k-mers \emph{along reads}.  Its $+583\%$
+separation demonstrates that even coarse positional information (within-read
+ordering) provides enormous discriminative power.  This suggests that the path
+to improving module persistence may lie in incorporating read-level positional
+information into the module graph, rather than in refining the bag-of-modules
+representation.
+
+\subsection{The Symbiogenesis Contribution: What's Genuinely New?}
+
+The module-persistence framework offers two genuinely novel contributions to
+reference-free relatedness detection:
+
+\begin{enumerate}
+  \item \textbf{Structural vocabulary.}  Rather than operating on raw k-mers
+        or k-mer frequencies, we construct a vocabulary of meaningful units
+        (modules) that capture co-occurrence structure.  This is analogous to
+        the difference between character n-grams and words in natural language
+        processing: words carry more semantic content per token.
+
+  \item \textbf{Front-loaded computation.}  Once the module vocabulary and
+        sample signatures are computed, pairwise comparison is $O(1)$ rather
+        than $O(n)$ per pair (where $n$ is the number of k-mers or reads).
+        This makes the method scalable to large cohorts where $\binom{N}{2}$
+        comparisons are needed.
+\end{enumerate}
+
+What is \emph{not} new is the underlying signal: the informative modules are
+ultimately detecting shared rare k-mers, the same signal that Rare-Run P90
+exploits more effectively.  The module structure groups these rare k-mers but
+does not (yet) exploit their spatial relationships.
+
+\subsection{Computational Profile: Front-Loaded Prep, Instant Compare}
+
+The timing profile of module persistence is sharply bimodal:
+
+\begin{pullquote}[dna-C]
+98\% of runtime is module extraction.\\
+Pairwise comparison is free.
+\end{pullquote}
+
+\noindent This profile is ideal for large cohort analysis.  If we have $N$
+samples, the prep cost is $O(N)$ and the compare cost is $O(N^2)$ but with a
+tiny constant.  For $N = 1000$ samples, the compare phase would take
+$\sim$500{,}000 $\times$ 0.01\,s $= 5{,}000$\,s, while the prep phase would
+take $\sim$1000 $\times$ 180\,s $= 180{,}000$\,s.  The prep-to-compare ratio
+improves as $N$ grows.
+
+For the current 6-sample evaluation, the 1084.6\,s prep time dominates and
+makes iterative parameter tuning slow.  This motivates GPU acceleration.
+
+\subsection{Native C Acceleration Potential}
+
+The module-extraction bottleneck is dominated by three operations:
+
+\begin{enumerate}
+  \item K-mer hashing and canonicalization: $\sim$40\% of prep time
+  \item Co-occurrence counting (hash table updates): $\sim$35\% of prep time
+  \item Module discovery (union-find): $\sim$25\% of prep time
+\end{enumerate}
+
+All three operations are embarrassingly parallel and well-suited to native
+C implementation:
+
+\begin{itemize}
+  \item K-mer hashing can use SIMD (AVX2/NEON) for parallel rolling hash
+        computation across multiple read positions.
+  \item Co-occurrence counting can use lock-free concurrent hash tables.
+  \item Union-find can use atomic operations for concurrent path compression.
+\end{itemize}
+
+\ymarginnote{Estimated speedup: 50--100$\times$ with native C + SIMD.}
+
+We estimate a 50--100$\times$ speedup from native C with SIMD, which would
+reduce per-sample extraction time from $\sim$180\,s to $\sim$2--4\,s.  This
+estimate is based on benchmarks of similar k-mer counting operations in C
+versus JavaScript: the combination of native integer arithmetic (no BigInt
+overhead), SIMD parallelism, and cache-friendly memory access typically yields
+50--100$\times$ for hash-table-heavy workloads.
+
+The yalumba native code infrastructure (\texttt{packages/native/}) already
+provides the scaffolding for C implementations with FFI bindings to the
+TypeScript layer.
+
+\subsection{Limitations}
+
+We identify the following specific limitations of the current approach:
+
+\begin{limitation}
+\textbf{Limitation 1: Negative weakest gap.}  The weakest gap of $-3.17\%$
+means the method cannot reliably classify all parent--child pairs.  The
+Pat.GF~$\to$~Father pair is misranked below the in-law pair
+Mat.GF~$\leftrightarrow$~Father.
+\end{limitation}
+
+\begin{limitation}
+\textbf{Limitation 2: No positional information.}  Modules are bags of
+co-occurring k-mers with no chromosomal coordinates.  The method cannot
+distinguish long IBD segments from scattered population-common sharing,
+which is the key discriminative feature in classical IBD detection.
+\end{limitation}
+
+\begin{limitation}
+\textbf{Limitation 3: Sensitivity to sample quality.}  The Pat.GF anomaly
+suggests that the method is sensitive to per-sample coverage depth and read
+quality.  Samples with lower effective coverage produce sparser module
+vocabularies and score lower across all pair types.
+\end{limitation}
+
+\begin{limitation}
+\textbf{Limitation 4: Fixed window and cohesion parameters.}  The window
+size (50\,bp) and cohesion threshold (0.3) were chosen empirically and may
+not be optimal for all datasets.  A systematic grid search over these
+parameters is needed but is currently bottlenecked by the 1084.6\,s prep time.
+\end{limitation}
+
+\begin{limitation}
+\textbf{Limitation 5: Small evaluation set.}  Six individuals and 10 pairs
+is insufficient to draw robust statistical conclusions.  The method needs to
+be evaluated on larger pedigrees with more relationship types (half-siblings,
+cousins, avuncular, etc.).
+\end{limitation}
+
+\begin{limitation}
+\textbf{Limitation 6: No population-frequency normalization.}  The current
+informative filtering (exclude modules present in all 6 samples) is a crude
+proxy for population-frequency weighting.  A proper approach would use an
+external population panel to estimate module frequencies and down-weight
+population-common modules proportionally.
+\end{limitation}
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Future Work}
+\label{sec:future}
+
+\subsection{Coalition Transfer Scoring}
+
+The current three-component score treats modules independently.  A
+coalition-transfer approach would score pairs based on the \emph{transfer}
+of module coalitions---groups of modules that consistently co-occur across
+samples.  If modules $A$, $B$, and $C$ always appear together in some
+samples but not others, their joint transfer is stronger evidence of
+relatedness than any individual module's presence.
+
+\subsection{Boundary Conservation}
+
+In the current framework, modules are unordered sets of motifs.  Adding
+boundary information---which motifs appear at the ``edges'' of a module's
+genomic footprint---could capture positional structure without requiring
+full chromosomal coordinates.  If two samples share a module with the same
+boundary motifs, this is stronger evidence of recent common ancestry than
+sharing a module with different boundaries.
+
+\subsection{Chromosome-Aware Module Partitioning}
+
+Reference-free read clustering methods~\cite{ebert2021haplotype} can
+assign reads to approximate chromosomal bins without alignment.  Partitioning
+modules by their chromosomal origin would allow per-chromosome comparison,
+amplifying the IBD signal on shared chromosomes while suppressing noise
+from unshared ones.  This is likely the single highest-impact improvement,
+given that classical IBD methods derive most of their power from
+chromosome-level resolution.
+
+\subsection{Rare Module Weighting (TF-IDF Style)}
+
+Inspired by term-frequency/inverse-document-frequency (TF-IDF) weighting
+in information retrieval~\cite{salton1988tfidf}, we can weight modules by
+their population frequency:
+
+\begin{equation}
+  w(m) = \text{tf}(m, X) \cdot \log\frac{N}{|\{Y : m \in M_Y\}|}
+  \label{eq:tfidf}
+\end{equation}
+
+\noindent where $\text{tf}(m, X)$ is the frequency of module $m$ in sample
+$X$ and $N$ is the total number of samples.  Rare modules (present in few
+samples) would receive higher weight, while population-common modules would
+be down-weighted.  This directly addresses the population sharing wall
+(Section~\ref{sec:sharing-wall}) by focusing the score on the informative
+fraction of the module vocabulary.
+
+\subsection{GPU Acceleration via SPIR-V Pipeline}
+
+The yalumba project includes a complete GPU compute pipeline: TypeScript
+DSL $\to$ C codegen $\to$ SPIR-V $\to$ GPU dispatch~\cite{liao2025sv}.
+The k-mer hashing and co-occurrence counting stages are natural candidates
+for GPU acceleration:
+
+\begin{itemize}
+  \item \textbf{K-mer hashing:}  Each read can be processed independently
+        on a separate GPU thread, with the rolling hash computed in parallel.
+  \item \textbf{Co-occurrence counting:}  Atomic operations on GPU shared
+        memory can maintain concurrent hash tables for pair counting.
+\end{itemize}
+
+With GPU acceleration, per-sample extraction time could potentially drop
+from $\sim$180\,s to $\sim$1--5\,s, enabling rapid parameter sweeps and
+real-time analysis.
+
+\subsection{Larger Pedigrees and Different Relationship Types}
+
+The current evaluation covers only first-degree (parent--child) relationships.
+A comprehensive validation requires:
+
+\begin{itemize}
+  \item \textbf{Second-degree relatives:}  Half-siblings, grandparent--grandchild,
+        avuncular (uncle/niece).
+  \item \textbf{Third-degree and beyond:}  First cousins, half-avuncular,
+        great-grandparent--great-grandchild.
+  \item \textbf{Unrelated pairs from diverse populations:}  To test robustness
+        across population structure boundaries.
+  \item \textbf{Large pedigrees:}  Families with 20+ members to test
+        scalability of the $O(N^2)$ comparison phase.
+\end{itemize}
+
+
+% ════════════════════════════════════════════════════════════════════
 \section{Conclusion}
 \label{sec:conclusion}
 
-Module-persistence scoring represents a viable approach to reference-free
-relatedness detection.  On the CEPH~1463 pedigree, the v2 scorer separates
-parent--child pairs from unrelated pairs by $+4.76$ percentage points on
-average, with the strongest signal arising from maternal-lineage
-relationships.  The method's primary limitation is a negative weakest gap
-of $-3.17$ percentage points, caused by population-structure-driven score
-inflation in one in-law pair.  Chromosome-aware module partitioning and
-frequency weighting are the most promising avenues for closing this gap
-and achieving robust, threshold-based classification without any reference
-genome.
+Module-persistence scoring represents a viable, if not yet sufficient,
+approach to reference-free relatedness detection from raw whole-genome
+sequencing reads.  On the CEPH~1463 pedigree, the v2 scorer separates the
+four parent--child pairs from six unrelated/in-law pairs by $+4.76$
+percentage points on average, a $2.4\times$ improvement over the v1 raw k-mer
+Jaccard baseline.  The strongest signal arises from maternal-lineage
+relationships, where the combination of informative module sharing (5--7\%)
+and spectral cosine similarity ($\sim$0.15) provides convincing separation
+above all unrelated pairs.  The method's front-loaded computational profile
+(1084.6\,s prep, $<$0.01\,s per comparison) makes it well-suited for large
+cohort analysis where $O(N^2)$ pairwise comparisons are required.
 
-The approach aligns with the broader goal of the yalumba project: building
-a complete, reference-free genomics compute engine from raw reads to
-relatedness metrics, with every component---from k-mer hashing to GPU
-dispatch---implemented from scratch~\cite{margulis1998}.
+The method's primary limitation is a negative weakest gap of $-3.17$
+percentage points, caused by the anomalous Pat.GF~$\to$~Father pair scoring
+below the in-law pair Mat.GF~$\leftrightarrow$~Father.  This overlap prevents
+threshold-based binary classification and indicates that the current feature
+set---module Jaccard, edge Jaccard, and spectral cosine---is not yet
+sufficient to overcome the population sharing wall for all first-degree pairs.
+The Rare-Run P90 baseline, which preserves within-read positional information,
+achieves $+583\%$ separation and perfect classification, demonstrating that
+positional structure is the key missing ingredient.  Incorporating positional
+information into the module framework---through boundary conservation,
+chromosome-aware partitioning, or coalition transfer---is the most promising
+path forward.
 
-% ────────────────────────────────────────────────────────────────
+The broader significance of this work lies in the symbiogenesis framing:
+by merging simple tokens (k-mers) into structured complexes (modules) and
+tracking their persistence across samples, we access a level of biological
+signal that is invisible to token-level methods.  The signal is real---the
+direction of separation is correct, and the maternal-lineage pairs score
+convincingly above background.  The challenge is to make it robust enough
+for confident classification.  This challenge aligns with the founding vision
+of the yalumba project: building a complete, reference-free genomics compute
+engine from raw reads to relatedness metrics, with every
+component---from FASTQ parsing to GPU dispatch---implemented from
+scratch~\cite{margulis1998}.  The module-persistence framework is one step
+on that path, imperfect but illuminating, and the failures it reveals are as
+instructive as its successes.
+
+% ════════════════════════════════════════════════════════════════════
 \bibliographystyle{plain}
 \bibliography{../references}
 
