@@ -51,6 +51,13 @@ export { adaptiveRarityWeightedRuns } from "./adaptive-rarity-weighted-runs.js";
 export { rareRunP90 } from "./rare-run-p90.js";
 export { rareEcosystemCosine } from "./rare-ecosystem-cosine.js";
 
+// SV ecology algorithms
+export { structuralRunP90 } from "./structural-run-p90.js";
+export { vntrModuleSpectrum } from "./vntr-module-spectrum.js";
+export { cargoTransferScore } from "./cargo-transfer-score.js";
+export { moduleCopyNumber } from "./module-copy-number.js";
+export { breakpointHomology } from "./breakpoint-homology.js";
+
 import { anchorOverlap } from "./anchor-overlap.js";
 import { normalizedAnchorOverlap } from "./normalized-anchor-overlap.js";
 import { seedExtendOverlapRate } from "./seed-extend-overlap-rate.js";
@@ -90,6 +97,11 @@ import { rareRunFrequencySweep } from "./rare-run-frequency-sweep.js";
 import { adaptiveRarityWeightedRuns } from "./adaptive-rarity-weighted-runs.js";
 import { rareRunP90 } from "./rare-run-p90.js";
 import { rareEcosystemCosine } from "./rare-ecosystem-cosine.js";
+import { structuralRunP90 } from "./structural-run-p90.js";
+import { vntrModuleSpectrum } from "./vntr-module-spectrum.js";
+import { cargoTransferScore } from "./cargo-transfer-score.js";
+import { moduleCopyNumber } from "./module-copy-number.js";
+import { breakpointHomology } from "./breakpoint-homology.js";
 
 /** All available experiments, ordered by expected signal strength */
 export const ALL_EXPERIMENTS: Experiment[] = [
@@ -145,4 +157,11 @@ export const ALL_EXPERIMENTS: Experiment[] = [
   adaptiveRarityWeightedRuns,
   rareRunP90,
   rareEcosystemCosine,
+
+  // SV ecology algorithms
+  structuralRunP90,
+  vntrModuleSpectrum,
+  cargoTransferScore,
+  moduleCopyNumber,
+  breakpointHomology,
 ];
