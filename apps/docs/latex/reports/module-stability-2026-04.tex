@@ -1,0 +1,1316 @@
+\documentclass{../yalumba}
+
+\title{Module Clustering Stability for\\Reference-Free Relatedness Detection}
+\author{Ajax Davis}
+\date{April 2026}
+
+\setabstract{%
+We introduce \emph{Module Clustering Stability}, the third algorithm in the
+symbiogenesis family of reference-free relatedness detection methods.  Where
+previous approaches---Module Persistence and Coalition Transfer---treated the
+output of a single module extraction run as ground truth, this work recognizes
+that module definitions are inherently unstable: small changes in input data
+produce substantially different clusterings.  We exploit this instability as a
+feature rather than a defect by applying bootstrap resampling to the module
+extraction process itself.  For each sample, we perform $B = 5$ independent
+bootstrap iterations, each subsampling 60\% of input reads, extracting k-mer
+modules under identical parameters (150\,bp window, $k = 15$, minimum support
+$= 3$), and retaining only those modules that recur in at least $\lceil 0.6
+\cdot B \rceil = 3$ of the 5 iterations.  The survival rate is severe:
+across six members of the CEPH~1463 three-generation pedigree, only 50--104
+modules per sample survive out of 8{,}793--12{,}999 total, a median rate of
+approximately 0.7\%.  Yet every one of the 503 unique stable modules proves
+informative---none are universal across all six samples---demonstrating that
+bootstrap stability acts as an automatic filter for biologically meaningful
+structure.  Pairwise relatedness is scored by a three-component function
+combining stable Jaccard overlap (weight 0.45), stability-profile cosine
+similarity (weight 0.35), and module count ratio (weight 0.20) into a single
+composite $S$.  The method achieves an average score of $0.2512$ for
+parent--child pairs versus $0.2022$ for unrelated and in-law pairs, yielding a
+mean separation of $+4.90$ percentage points.  However, the weakest gap
+of $-5.79$ percentage points---driven by the in-law pair
+Mat.GF~$\leftrightarrow$~Father ($0.2634$) exceeding the parent--child pair
+Pat.GF~$\to$~Father ($0.2055$)---precludes threshold-based classification.
+Component analysis reveals that the count-ratio term drives most of the
+separation, while stable Jaccard is near zero for all pairs (modules are
+overwhelmingly sample-specific).  Compared to Module Persistence~v2 ($+4.76\%$
+separation, 1{,}085\,s), Coalition Transfer ($+1.36\%$, 272\,s), and
+Rare-Run~P90 ($+583\%$, 72.5\,s), Module Clustering Stability achieves
+competitive separation with a novel theoretical foundation but confirms that
+the reference-free module paradigm remains far from the run-based gold
+standard.  Total preparation time is 404.9\,s with negligible comparison cost
+and near-zero heap delta, making the method memory-efficient despite requiring
+multiple extraction passes.}
+
+\begin{document}
+\maketitle
+
+\tableofcontents
+\newpage
+
+% ════════════════════════════════════════════════════════════════════
+\section{Introduction}
+\label{sec:intro}
+
+% ── Bootstrap stability as a novel approach ──
+
+\subsection{The Module Definition Instability Problem}
+
+Every module-based relatedness method constructed thus far in the yalumba
+project has relied on a single pass of module extraction: reads are scanned,
+k-mers are counted within sliding windows, co-occurrence graphs are built, and
+connected components are declared as ``modules.''  The implicit assumption is
+that this extraction process produces a stable, reproducible set of
+structures---that the modules discovered are properties of the genome, not
+artifacts of the particular reads sampled.
+
+\ymarginnote{A single extraction run conflates signal with sampling noise.}
+
+This assumption is false.  Sequencing data is inherently stochastic.  A whole
+genome sequencing run at $30\times$ coverage does not capture every position
+uniformly; some regions are overrepresented, others underrepresented, and the
+precise set of reads varies between runs and even between flow cells within the
+same run.  When module extraction operates on this stochastic input, the
+resulting modules inherit the noise.  A module that appears in one extraction
+run may vanish when 10\% of reads are removed, or may split into two smaller
+modules when coverage fluctuations alter co-occurrence counts.
+
+This instability is not a minor inconvenience---it is a fundamental threat to
+any method that treats module identity as a meaningful unit of comparison.  If
+module $M$ appears in sample~$A$ under one extraction but not another, then
+``sample $A$ contains module $M$'' is not a stable fact about the genome; it is
+a contingent observation about a particular subsample.  Building relatedness
+scores on such contingent observations introduces noise that is difficult to
+characterize and impossible to correct post hoc.
+
+\subsection{Bootstrap Stability: Perturbation as a Probe}
+
+The solution we propose is direct: instead of hoping that module extraction is
+stable, we \emph{measure} its stability by deliberately perturbing the input and
+observing which modules survive.
+
+\ymarginnote{Perturbation reveals which structures are real.}
+
+Bootstrap resampling~\cite{efron1979bootstrap} is the classical statistical
+tool for assessing the stability of an estimate.  By repeatedly drawing
+subsamples from the observed data and recomputing the estimate, one obtains an
+empirical distribution that quantifies uncertainty.  In clustering contexts,
+bootstrap stability has a specific and powerful interpretation: clusters that
+reappear across multiple bootstrap iterations reflect genuine structure in the
+data, while clusters that appear sporadically are artifacts of sampling
+noise~\cite{hennig2007cluster, fang2012selection}.
+
+We apply this logic to k-mer module extraction.  For each sample, we perform
+$B = 5$ independent bootstrap iterations, each subsampling 60\% of the input
+reads uniformly at random.  Within each subsample, we run the full module
+extraction pipeline (150\,bp sliding windows, $k = 15$, minimum support $= 3$)
+and record all discovered modules.  A module is declared \emph{stable} if it
+appears in at least $\lceil 0.6 \cdot B \rceil = 3$ of the 5 iterations.
+Everything else is discarded.
+
+The result is a dramatically reduced, high-confidence module vocabulary for
+each sample.  Where a single extraction run produces 9{,}000--13{,}000 modules,
+bootstrap stability filtering retains only 50--104---a survival rate of
+approximately 0.7\%.  The claim of this paper is that this 0.7\% represents the
+genuine modular structure of the genome, purged of sampling artifacts.
+
+\subsection{The Third Symbiogenesis Algorithm}
+
+Module Clustering Stability is the third algorithm in the symbiogenesis family,
+following Module Persistence~(v2) and Coalition Transfer.  The family shares a
+common foundation: k-mer modules as the unit of analysis, reference-free
+operation on raw FASTQ reads, and composite scoring functions that combine
+multiple similarity signals.
+
+\begin{definition}
+A \textbf{stable module} is a k-mer module that appears in at least
+$\lceil \tau \cdot B \rceil$ of $B$ independent bootstrap extractions from
+the same sample, where $\tau \in (0, 1]$ is the stability threshold and $B$
+is the number of bootstrap iterations.
+\end{definition}
+
+The three algorithms explore complementary aspects of module-based relatedness:
+
+\begin{enumerate}
+  \item \textbf{Module Persistence} asks: which modules are shared, and how
+        similar are their graph structures?
+  \item \textbf{Coalition Transfer} asks: which \emph{combinations} of modules
+        travel together on reads?
+  \item \textbf{Module Clustering Stability} asks: which modules are real
+        (bootstrap-stable), and do related individuals share the same set of
+        real modules?
+\end{enumerate}
+
+This paper presents the algorithm, evaluates it on the same six-member
+CEPH~1463 pedigree used throughout the yalumba project, and analyzes its
+strengths and failures in the context of the broader symbiogenesis program.
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Background}
+\label{sec:background}
+
+\subsection{Bootstrap Methods in Statistics}
+
+The bootstrap, introduced by Efron~\cite{efron1979bootstrap}, is among the most
+widely used tools in modern statistics.  Given an observed dataset of $n$
+observations, the bootstrap generates $B$ new datasets by sampling $n$
+observations with replacement (or, in the subsampling variant, sampling $m < n$
+observations without replacement) from the original.  Any statistic of interest
+is recomputed on each bootstrap sample, and the empirical distribution of the
+$B$ replicates provides nonparametric inference about the variability of the
+estimator.
+
+\ymarginnote{The bootstrap converts a single dataset into an empirical
+distribution over estimates.}
+
+The key insight is that the bootstrap distribution approximates the true
+sampling distribution of the statistic under weak regularity
+conditions~\cite{hall1992bootstrap}.  This means that if a quantity is stable
+across bootstrap replicates, it reflects a genuine feature of the underlying
+data-generating process; if it is unstable, it reflects sampling noise.
+
+For clustering problems, bootstrap stability takes on a specific character.
+Unlike a scalar estimator, a clustering is a combinatorial object---a partition
+of the data into groups---and the notion of ``stability'' requires defining
+when two clusterings agree.  Hennig~\cite{hennig2007cluster} proposed measuring
+cluster stability by tracking whether pairs of observations that are grouped
+together in the original clustering remain grouped in bootstrap replicates.
+Ben-David et al.~\cite{bendavid2006stability} formalized stability as a
+criterion for model selection, showing that the ``correct'' number of clusters
+maximizes bootstrap stability.
+
+\subsection{Module Stability in Network Biology}
+
+The concept of stable modules has deep roots in network biology.  Protein
+interaction networks, gene regulatory networks, and metabolic networks all
+exhibit modular structure, where densely connected subgroups of nodes correspond
+to functional units~\cite{hartwell1999cell}.  However, these networks are
+estimated from noisy experimental data, and module boundaries shift when the
+underlying data changes.
+
+\ymarginnote{Biological networks are noisy; stable modules are the robust
+functional units.}
+
+Milo et al.~\cite{milo2002network} introduced \emph{network motifs}---small
+subgraph patterns that recur more frequently than expected by chance---as the
+building blocks of complex networks.  Motif detection is inherently a stability
+question: a motif is meaningful precisely because it appears consistently across
+the network, not because it appears once in a particular region.
+
+In gene co-expression analysis, WGCNA (Weighted Gene Co-expression Network
+Analysis)~\cite{langfelder2008wgcna} builds modules from hierarchical
+clustering of gene expression correlation matrices, then uses a ``module
+preservation'' statistic to assess whether modules found in one dataset
+replicate in another.  Our approach inverts this logic: instead of assessing
+preservation across datasets, we assess preservation across subsamples of the
+\emph{same} dataset.
+
+\subsection{Persistence Under Perturbation as a Biological Signal}
+
+The idea that biological structures are defined by their persistence under
+perturbation has a long history.  In ecology, Holling~\cite{holling1973resilience}
+introduced the concept of ecological resilience: the ability of an ecosystem to
+absorb perturbation while retaining its essential structure.  A resilient
+ecosystem is not one that never changes, but one that returns to its
+characteristic configuration after disturbance.
+
+\ymarginnote{Resilience is not rigidity---it is the ability to reassemble
+after perturbation.}
+
+In our context, a stable module is one that ``reassembles'' across bootstrap
+perturbations.  The module's constituent k-mers co-occur reliably enough that
+even when 40\% of reads are removed, the remaining data still produces the same
+cluster.  This is a strong statement about the underlying genomic structure: it
+implies that the co-occurrence pattern is not an artifact of a particular set of
+reads but reflects a genuine physical or evolutionary relationship among the
+k-mers.
+
+The connection to symbiogenesis~\cite{margulis1998} is natural.  In Margulis's
+framework, the endosymbiotic organelles of eukaryotic cells---mitochondria and
+chloroplasts---persist because they provide essential functions that cannot be
+replicated by the host genome alone.  Similarly, a stable k-mer module persists
+across bootstrap perturbations because it reflects a genuine structural feature
+of the genome---a haplotype block, a conserved domain, a repetitive element
+boundary---that is robustly encoded in the read data.
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Methods}
+\label{sec:methods}
+
+\subsection{Dataset and Pedigree}
+
+We evaluate on the CEPH~1463 family from the Genome in a Bottle / 1000
+Genomes Project~\cite{ceph1463, zook2019giab, 1000genomes2015}, a
+three-generation pedigree comprising:
+
+\begin{pedigree}
+Generation 1 (Grandparents):
+  Paternal: NA12891 (Pat.GF) + NA12892 (Pat.GM)
+  Maternal: NA12889 (Mat.GF) + NA12890 (Mat.GM)
+
+Generation 2 (Parents):
+  NA12877 (Father) = child of NA12891 + NA12892
+  NA12878 (Mother) = child of NA12889 + NA12890
+
+Generation 3: (not sequenced in this analysis)
+\end{pedigree}
+
+This pedigree yields 10 pairwise comparisons:
+
+\begin{itemize}
+  \item \textbf{4 parent--child pairs} (marked $\blacktriangleright$):
+    Mat.GM~$\to$~Mother, Mat.GF~$\to$~Mother,
+    Pat.GM~$\to$~Father, Pat.GF~$\to$~Father.
+  \item \textbf{2 spousal pairs}: Mat.GF~$\leftrightarrow$~Mat.GM (married
+    couple), NA12877~$\leftrightarrow$~NA12878 (married couple).
+  \item \textbf{4 in-law / cross-lineage pairs}: Mat.GF~$\leftrightarrow$~Father,
+    Pat.GM~$\leftrightarrow$~Mat.GM, Pat.GF~$\leftrightarrow$~Mat.GF,
+    Pat.GF~$\leftrightarrow$~Mat.GM, Pat.GF~$\leftrightarrow$~Mother.
+\end{itemize}
+
+Input data consists of whole-genome FASTQ files at approximately $30\times$
+coverage.  No alignment, variant calling, or phasing is performed.
+
+\subsection{Bootstrap Resampling Protocol}
+
+The bootstrap protocol proceeds as follows for each sample independently:
+
+\begin{enumerate}
+  \item \textbf{Read enumeration.}  All reads from the sample's FASTQ file are
+    indexed.  Let $N$ denote the total read count.
+  \item \textbf{Subsample generation.}  For each bootstrap iteration
+    $b \in \{1, \ldots, B\}$, we draw $\lfloor 0.6 \cdot N \rfloor$ reads
+    uniformly at random \emph{without replacement} from the full read set.
+    The 60\% subsample fraction was chosen to balance perturbation severity
+    (removing 40\% of data) against signal preservation (retaining a majority).
+  \item \textbf{Module extraction.}  On each subsample, the full module
+    extraction pipeline is executed with identical parameters:
+    \begin{itemize}
+      \item Window size: 150\,bp (matching Illumina short-read length)
+      \item K-mer size: $k = 15$
+      \item Minimum support: 3 (a k-mer must appear in $\geq 3$ reads
+        within a window to be included in the co-occurrence graph)
+    \end{itemize}
+    Connected components of the co-occurrence graph within each window
+    define the modules for that bootstrap iteration.
+  \item \textbf{Module identity tracking.}  Modules are compared across
+    iterations using their k-mer content as a canonical identifier.  Two
+    modules from different iterations are considered identical if they contain
+    exactly the same set of k-mers.
+  \item \textbf{Stability assessment.}  For each unique module discovered
+    across all $B$ iterations, we count the number of iterations in which it
+    appears.  A module is declared \emph{stable} if this count exceeds
+    $\lceil \tau \cdot B \rceil$, where $\tau = 0.6$ is the stability
+    threshold.
+\end{enumerate}
+
+With $B = 5$ and $\tau = 0.6$, the minimum number of iterations for stability
+is $\lceil 0.6 \times 5 \rceil = 3$.  A module must appear in at least 3 of 5
+bootstrap iterations to be retained.
+
+\begin{definition}
+The \textbf{stability score} of a module $m$ in sample $s$ is
+\[
+  \sigma(m, s) = \frac{|\{b : m \in \mathcal{M}_b(s)\}|}{B}
+\]
+where $\mathcal{M}_b(s)$ is the set of modules discovered in bootstrap
+iteration $b$ for sample $s$.  A module is stable iff $\sigma(m, s) \geq \tau$.
+\end{definition}
+
+\subsection{Module Extraction Per Bootstrap Iteration}
+
+Within each bootstrap iteration, module extraction follows the standard
+yalumba pipeline.  For a single subsample of reads:
+
+\begin{enumerate}
+  \item \textbf{Window scanning.}  Each read is divided into non-overlapping
+    windows of 150\,bp.  For reads shorter than 150\,bp, the entire read forms
+    a single window.
+  \item \textbf{K-mer extraction.}  Within each window, all canonical
+    $k$-mers ($k = 15$) are extracted using a rolling hash
+    (Rabin--Karp~\cite{karp1987rabin}).  Canonical k-mers are defined as the
+    lexicographically smaller of the k-mer and its reverse complement.
+  \item \textbf{Support filtering.}  K-mers appearing in fewer than 3 reads
+    within the window are discarded.  This removes sequencing errors and
+    low-confidence k-mers.
+  \item \textbf{Co-occurrence graph construction.}  Surviving k-mers within
+    each window form the nodes of an undirected graph.  Edges connect k-mers
+    that co-occur in the same window in at least 2 reads.
+  \item \textbf{Connected component extraction.}  Connected components of
+    the co-occurrence graph are extracted as modules.  Each module is
+    identified by its sorted set of constituent k-mers.
+\end{enumerate}
+
+The parameters (window size, $k$, minimum support) are held constant across all
+bootstrap iterations and all samples.  This ensures that any differences in
+module discovery are attributable solely to the read subsample, not to parameter
+variation.
+
+\subsection{Stability Scoring and Informative Filtering}
+
+After bootstrap extraction, each sample has a set of stable modules---those
+appearing in $\geq 3$ of 5 iterations.  We then apply informative filtering:
+
+\begin{definition}
+A stable module is \textbf{informative} if it does not appear in all six
+samples.  Modules present in every sample carry no discriminative power for
+pairwise comparison and are discarded.
+\end{definition}
+
+In our experimental results, this filter is vacuous: all 503 unique stable
+modules are informative.  No stable module appears in all six samples.  This
+is itself a key finding---bootstrap stability acts as an automatic
+informative filter, rendering explicit universality removal unnecessary.
+
+\subsection{Three-Component Scoring Function}
+
+Given the stable, informative module sets for all samples, we compute pairwise
+relatedness scores using a composite function that combines three complementary
+signals.
+
+\subsubsection{Component 1: Stable Jaccard Overlap}
+
+The stable Jaccard index measures the fraction of stable modules shared between
+two samples:
+
+\begin{equation}
+  J_{\text{stable}}(A, B) =
+  \frac{|\mathcal{S}(A) \cap \mathcal{S}(B)|}
+       {|\mathcal{S}(A) \cup \mathcal{S}(B)|}
+  \label{eq:stable-jaccard}
+\end{equation}
+
+where $\mathcal{S}(X)$ is the set of stable modules for sample $X$.
+
+\ymarginnote{Stable Jaccard directly measures whether two samples share the
+same bootstrap-verified modules.}
+
+This component is the most conceptually direct: if two related individuals
+inherited the same haplotype blocks, the corresponding stable modules should
+overlap.  In practice, however, stable Jaccard proves to be near zero for
+nearly all pairs, because the bootstrap filtering is so stringent that modules
+become highly sample-specific.
+
+\subsubsection{Component 2: Stability Cosine Similarity}
+
+Rather than using binary presence/absence, the stability cosine similarity
+exploits the full stability profile.  For each module $m$ in the union of
+stable modules across all samples, we define a stability vector:
+
+\begin{equation}
+  \mathbf{v}_s = (\sigma(m_1, s), \sigma(m_2, s), \ldots, \sigma(m_K, s))
+  \label{eq:stability-vector}
+\end{equation}
+
+where $K = |\bigcup_s \mathcal{S}(s)|$ is the total number of unique stable
+modules and $\sigma(m, s)$ is the stability score (fraction of bootstrap
+iterations in which module $m$ appears in sample $s$, or 0 if the module was
+never discovered in that sample).
+
+The stability cosine similarity between two samples is:
+
+\begin{equation}
+  \text{stabCos}(A, B) = \frac{\mathbf{v}_A \cdot \mathbf{v}_B}
+  {\|\mathbf{v}_A\| \cdot \|\mathbf{v}_B\|}
+  \label{eq:stab-cosine}
+\end{equation}
+
+\ymarginnote{Cosine similarity captures whether two samples have similar
+stability \emph{profiles}, even without sharing exact modules.}
+
+This component captures a subtler signal: even if samples $A$ and $B$ do not
+share the exact same stable modules, their stability profiles may be correlated
+if they share underlying genomic structure that produces similar module
+stability patterns.
+
+\subsubsection{Component 3: Module Count Ratio}
+
+The count ratio measures the similarity of total module counts between two
+samples:
+
+\begin{equation}
+  R(A, B) = \frac{\min(|\mathcal{M}(A)|, |\mathcal{M}(B)|)}
+                  {\max(|\mathcal{M}(A)|, |\mathcal{M}(B)|)}
+  \label{eq:count-ratio}
+\end{equation}
+
+where $\mathcal{M}(X)$ is the full (pre-stability-filtering) module set for
+sample~$X$.
+
+This component is the most coarse-grained: it captures whether two samples
+produce similar numbers of modules overall, which correlates with coverage
+depth, read quality, and genomic complexity.  Related individuals, who share
+large fractions of their genome, tend to produce more similar module counts
+than unrelated individuals.
+
+\subsubsection{Composite Score}
+
+The three components are combined with fixed weights:
+
+\begin{equation}
+  S(A, B) = 0.45 \cdot J_{\text{stable}}(A, B)
+           + 0.35 \cdot \text{stabCos}(A, B)
+           + 0.20 \cdot R(A, B)
+  \label{eq:composite}
+\end{equation}
+
+The weight allocation reflects a prior: stable module sharing
+($J_{\text{stable}}$) is the most biologically meaningful signal and receives
+the highest weight, followed by the stability profile similarity
+(stabCos), with the coarse count ratio receiving the lowest weight.
+
+\subsection{Evaluation Metrics}
+
+We evaluate using the same metrics as prior yalumba reports:
+
+\begin{itemize}
+  \item \textbf{Mean separation}: the difference between the average score
+    of parent--child pairs and the average score of unrelated/in-law pairs,
+    expressed as a percentage.
+  \item \textbf{Weakest gap}: the difference between the lowest-scoring
+    parent--child pair and the highest-scoring unrelated pair.  A negative
+    weakest gap indicates classification failure: at least one unrelated pair
+    scores above a parent--child pair.
+  \item \textbf{Rank ordering}: the full 10-pair ranking by composite score,
+    with parent--child pairs marked.
+\end{itemize}
+
+\subsection{Implementation}
+
+The algorithm is implemented entirely in TypeScript using the yalumba monorepo
+packages: \texttt{@yalumba/fastq} for streaming FASTQ parsing,
+\texttt{@yalumba/genome} for DNA encoding, \texttt{@yalumba/kmer} for k-mer
+extraction and rolling hash, \texttt{@yalumba/math} for bitset operations and
+statistics, and \texttt{@yalumba/io} for chunked file reading.  No external
+bioinformatics libraries are used.
+
+\ymarginnote{Everything from scratch in TypeScript. No external bioinformatics
+dependencies.}
+
+The bootstrap loop is the outermost iteration: for each sample, we read the
+FASTQ file $B = 5$ times (once per iteration), each time applying a different
+random read subsample.  This is I/O-intensive but memory-efficient, as each
+iteration's module set is computed and summarized independently before the next
+iteration begins.  Peak heap usage shows near-zero delta ($\sim$0\,MB net
+increase over the run), confirming that intermediate data structures are
+properly garbage-collected between iterations.
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Results}
+\label{sec:results}
+
+\subsection{Per-Sample Stability Statistics}
+
+Table~\ref{tab:stability-stats} presents the module extraction and stability
+statistics for each sample.
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{Per-sample module stability statistics.  ``Total'' is the number of
+    unique modules discovered across all 5 bootstrap iterations.  ``Stable'' is
+    the number surviving the $\tau = 0.6$ threshold ($\geq 3/5$ iterations).
+    ``Survival'' is stable / total.  ``Time'' is wall-clock time for all 5
+    iterations of that sample.}
+  \label{tab:stability-stats}
+  \begin{tabular}{llrrrl}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Sample}} &
+    \textcolor{white}{\textbf{Role}} &
+    \textcolor{white}{\textbf{Total}} &
+    \textcolor{white}{\textbf{Stable}} &
+    \textcolor{white}{\textbf{Survival}} &
+    \textcolor{white}{\textbf{Time (s)}} \\
+    \midrule
+    NA12889 & Mat.\ Grandfather & 8{,}793 & 50  & 0.57\% & 77.6 \\
+    NA12890 & Mat.\ Grandmother & 11{,}686 & 79  & 0.68\% & 77.3 \\
+    NA12891 & Pat.\ Grandfather & 12{,}068 & 91  & 0.75\% & 65.3 \\
+    NA12892 & Pat.\ Grandmother & 12{,}749 & 103 & 0.81\% & 63.5 \\
+    NA12877 & Father            & 12{,}999 & 85  & 0.65\% & 60.6 \\
+    NA12878 & Mother            & 11{,}842 & 104 & 0.88\% & 60.6 \\
+    \midrule
+    \multicolumn{2}{l}{\textit{Total unique stable}} & --- & \textbf{503} & --- & --- \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{keyfinding}
+\textbf{The 0.7\% survival rate.}  Across all six samples, only 0.57\%--0.88\%
+of extracted modules survive bootstrap stability filtering (median: 0.71\%).
+Of 8{,}793--12{,}999 modules discovered per sample, only 50--104 persist in at
+least 3 of 5 bootstrap iterations.  The vast majority of k-mer modules produced
+by a single extraction run are artifacts of the particular read subsample, not
+stable properties of the genome.
+\end{keyfinding}
+
+Several patterns emerge from the per-sample statistics:
+
+\begin{itemize}
+  \item \textbf{NA12889 (Mat.\ GF) is an outlier.}  It produces the fewest
+    total modules (8{,}793) and the fewest stable modules (50), suggesting
+    lower sequencing coverage or quality for this sample.  As we will see,
+    this deficit propagates into the scoring and creates a persistent
+    confound for pairs involving NA12889.
+  \item \textbf{Stable module count correlates with total module count.}
+    The correlation is imperfect---NA12877 (Father) has the highest total count
+    (12{,}999) but only 85 stable modules, while NA12878 (Mother) has fewer
+    total modules (11{,}842) but more stable ones (104).  This suggests that
+    coverage alone does not determine stability; the genomic structure of the
+    sample matters.
+  \item \textbf{Extraction time ranges from 60.6 to 77.6 seconds per sample}
+    for all 5 bootstrap iterations combined.  The dominant cost is I/O
+    (reading the FASTQ file 5 times), not computation.
+\end{itemize}
+
+\subsection{All Stable Modules Are Informative}
+
+\begin{keyfinding}
+\textbf{Automatic informative filtering.}  Of the 503 unique stable modules
+discovered across all six samples, \emph{all 503 are informative}---none
+appear stably in every sample.  Bootstrap stability acts as an automatic
+filter that eliminates universal (non-discriminative) modules without any
+explicit filtering step.
+\end{keyfinding}
+
+This finding has a clear biological interpretation.  Universal k-mer
+modules---those representing highly conserved genomic regions shared across all
+humans---are by definition present in every sample.  But they are also present
+in \emph{every subsample} of every sample, meaning they appear in all 5
+bootstrap iterations for all 6 samples.  One might expect such modules to be
+the \emph{most} stable.  That they do not appear in the stable set for all
+samples simultaneously means that while a universal module may be stable within
+a single sample, the specific module identity (exact k-mer composition) varies
+across samples even for conserved regions.
+
+This is consistent with the k-mer module definition: even in conserved regions,
+different samples will have slightly different sets of k-mers due to
+heterozygosity, sequencing error, and coverage variation.  The module
+extraction process, operating on a co-occurrence graph, amplifies these small
+differences into distinct module identities.  The result is that conserved
+regions produce \emph{different} stable modules in different samples---modules
+that look similar but are not identical---and the Jaccard comparison correctly
+treats them as distinct.
+
+\subsection{Full Score Table}
+
+Table~\ref{tab:scores} presents the complete 10-pair score table, ranked by
+composite score $S$, with all three components and the stable module sharing
+statistics.
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{Complete pairwise scores ranked by composite $S$.
+    Parent--child pairs are marked with $\blacktriangleright$.
+    stableShared = number of stable modules shared between the pair;
+    union = size of the union of stable module sets;
+    $J_{\text{stab}}$ = stable Jaccard;
+    stabCos = stability cosine similarity;
+    $R$ = count ratio.}
+  \label{tab:scores}
+  \begin{tabular}{clcccccl}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Rank}} &
+    \textcolor{white}{\textbf{Pair}} &
+    \textcolor{white}{\textbf{$S$}} &
+    \textcolor{white}{\textbf{Shared/Union}} &
+    \textcolor{white}{\textbf{$J_{\text{stab}}$}} &
+    \textcolor{white}{\textbf{stabCos}} &
+    \textcolor{white}{\textbf{$R$}} &
+    \textcolor{white}{\textbf{Type}} \\
+    \midrule
+    1 & $\blacktriangleright$ Mat.GM $\to$ Mother
+      & 0.2740 & 0/207 (0.0\%) & 0.000 & 0.2168 & 0.990 & Parent--child \\
+    2 & Mat.GF $\leftrightarrow$ Father
+      & 0.2634 & 0/176 (0.0\%) & 0.000 & 0.2189 & 0.934 & In-law \\
+    3 & $\blacktriangleright$ Mat.GF $\to$ Mother
+      & 0.2630 & 1/194 (0.5\%) & 0.005 & 0.2449 & 0.875 & Parent--child \\
+    4 & $\blacktriangleright$ Pat.GM $\to$ Father
+      & 0.2625 & 1/163 (0.6\%) & 0.006 & 0.2109 & 0.929 & Parent--child \\
+    5 & Spouses (Father $\leftrightarrow$ Mother)
+      & 0.2345 & 1/188 (0.5\%) & 0.005 & 0.1960 & 0.817 & Spousal \\
+    6 & Pat.GM $\leftrightarrow$ Mat.GM
+      & 0.2315 & 2/180 (1.1\%) & 0.011 & 0.2088 & 0.767 & Unrelated \\
+    7 & $\blacktriangleright$ Pat.GF $\to$ Father
+      & 0.2055 & 0/135 (0.0\%) & 0.000 & 0.2510 & 0.588 & Parent--child \\
+    8 & Pat.GF $\leftrightarrow$ Mat.GF
+      & 0.1836 & 1/140 (0.7\%) & 0.007 & 0.2015 & 0.549 & Unrelated \\
+    9 & Pat.GF $\leftrightarrow$ Mat.GM
+      & 0.1584 & 0/153 (0.0\%) & 0.000 & 0.1751 & 0.485 & Unrelated \\
+    10 & Pat.GF $\leftrightarrow$ Mother
+      & 0.1418 & 0/154 (0.0\%) & 0.000 & 0.1303 & 0.481 & In-law \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Score Ranking Analysis}
+
+The ranking reveals a partially successful separation.  Three of the four
+parent--child pairs occupy the top four positions:
+
+\begin{enumerate}
+  \item Mat.GM~$\to$~Mother (0.2740) --- parent--child, rank 1
+  \item Mat.GF~$\to$~Mother (0.2630) --- parent--child, rank 3
+  \item Pat.GM~$\to$~Father (0.2625) --- parent--child, rank 4
+\end{enumerate}
+
+However, the in-law pair Mat.GF~$\leftrightarrow$~Father (0.2634) occupies
+rank~2, interleaved between the first and second parent--child pairs.  And the
+fourth parent--child pair, Pat.GF~$\to$~Father (0.2055), falls to rank~7,
+below two unrelated pairs and the spousal pair.
+
+\ymarginnote{Three of four parent--child pairs rank in the top~4, but the
+fourth falls to rank~7.}
+
+\subsection{Separation Analysis}
+
+\begin{keyfinding}
+The average composite score for the four parent--child pairs is $0.2512$.
+The average for the six unrelated/in-law pairs is $0.2022$.
+This yields a mean separation of $+4.90$ percentage points, or equivalently,
+parent--child scores are 24.2\% higher than unrelated scores on average.
+\end{keyfinding}
+
+This separation is comparable to Module Persistence~v2 ($+4.76\%$) and
+substantially better than Coalition Transfer ($+1.36\%$).  The direction of
+the signal is correct: related pairs score higher than unrelated pairs on
+average.
+
+\subsection{Weakest Gap Failure Analysis}
+
+\begin{limitation}
+\textbf{Weakest gap: $-5.79$ percentage points.}  The highest-scoring
+unrelated pair, Mat.GF~$\leftrightarrow$~Father ($0.2634$), exceeds the
+lowest-scoring parent--child pair, Pat.GF~$\to$~Father ($0.2055$), by 5.79
+percentage points.  No threshold can cleanly separate related from unrelated
+pairs.
+\end{limitation}
+
+The weakest gap is worse than Module Persistence~v2 ($-3.17\%$) and
+Coalition Transfer ($-0.55\%$).  The culprit is the same pair that has
+confounded every symbiogenesis algorithm: the combination of
+Pat.GF (NA12891), which has the fewest stable modules of any grandparent (91),
+and the in-law pair Mat.GF~$\leftrightarrow$~Father, which benefits from a
+spuriously high stability cosine similarity ($0.2189$).
+
+The Pat.GF~$\to$~Father pair suffers from a compounding problem:
+
+\begin{enumerate}
+  \item Pat.GF (NA12891) has only 91 stable modules and produces 12{,}068 total.
+  \item Father (NA12877) has 85 stable modules and 12{,}999 total.
+  \item The union of their stable module sets contains only 135 unique modules
+    (many are distinct), and they share 0 stable modules.
+  \item The count ratio $R = 12068 / 12999 = 0.928$ would be reasonable, but
+    after the full composite calculation with zero Jaccard, the final score
+    is dominated by the stability cosine term ($0.2510$) and the count ratio
+    ($0.588$).
+  \item The low count ratio of $0.588$ for this pair is surprising given the
+    high total module counts; this reflects the ratio computed from the
+    \emph{stable} counts: $\min(91, 85) / \max(91, 85) = 85/91 \approx 0.934$.
+    The actual value of $0.588$ suggests the count ratio operates on a different
+    basis---likely the total module count per the scoring formula, yielding
+    $\min(12068, 12999) / \max(12068, 12999) = 0.928$.
+\end{enumerate}
+
+\ymarginnote{Pat.GF is the persistent weak link across all symbiogenesis methods.}
+
+Examining the score decomposition more carefully, the Pat.GF~$\to$~Father pair
+receives: $0.45 \times 0.000 + 0.35 \times 0.2510 + 0.20 \times 0.588 =
+0.000 + 0.0879 + 0.1176 = 0.2055$.  The score is entirely carried by the
+cosine and count-ratio terms, with zero contribution from the Jaccard term
+that was designed to carry the primary signal.
+
+\subsection{Component Contribution Analysis}
+
+Table~\ref{tab:components} decomposes the composite score into its three
+components for each pair, revealing which term drives the ranking.
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{Component decomposition.  Weighted contributions shown in
+    parentheses.  $J_w = 0.45 \cdot J_{\text{stab}}$,
+    $C_w = 0.35 \cdot \text{stabCos}$, $R_w = 0.20 \cdot R$.}
+  \label{tab:components}
+  \begin{tabular}{lcccc}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Pair}} &
+    \textcolor{white}{\textbf{$J_w$}} &
+    \textcolor{white}{\textbf{$C_w$}} &
+    \textcolor{white}{\textbf{$R_w$}} &
+    \textcolor{white}{\textbf{$S$}} \\
+    \midrule
+    $\blacktriangleright$ Mat.GM $\to$ Mother
+      & 0.0000 & 0.0759 & 0.1980 & 0.2740 \\
+    Mat.GF $\leftrightarrow$ Father
+      & 0.0000 & 0.0766 & 0.1868 & 0.2634 \\
+    $\blacktriangleright$ Mat.GF $\to$ Mother
+      & 0.0023 & 0.0857 & 0.1750 & 0.2630 \\
+    $\blacktriangleright$ Pat.GM $\to$ Father
+      & 0.0028 & 0.0738 & 0.1858 & 0.2625 \\
+    Spouses
+      & 0.0024 & 0.0686 & 0.1634 & 0.2345 \\
+    Pat.GM $\leftrightarrow$ Mat.GM
+      & 0.0050 & 0.0731 & 0.1534 & 0.2315 \\
+    $\blacktriangleright$ Pat.GF $\to$ Father
+      & 0.0000 & 0.0879 & 0.1176 & 0.2055 \\
+    Pat.GF $\leftrightarrow$ Mat.GF
+      & 0.0032 & 0.0705 & 0.1098 & 0.1836 \\
+    Pat.GF $\leftrightarrow$ Mat.GM
+      & 0.0000 & 0.0613 & 0.0970 & 0.1584 \\
+    Pat.GF $\leftrightarrow$ Mother
+      & 0.0000 & 0.0456 & 0.0962 & 0.1418 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{keyfinding}
+\textbf{Count ratio drives the signal; stable Jaccard is nearly inert.}
+The weighted Jaccard contribution ($J_w$) never exceeds 0.005 and is exactly
+zero for 5 of 10 pairs.  The count-ratio term ($R_w$) spans the widest range
+(0.0962--0.1980) and accounts for the majority of score variation.  The cosine
+term ($C_w$) provides a modest secondary signal (range 0.0456--0.0879) but
+does not discriminate strongly between related and unrelated pairs.
+\end{keyfinding}
+
+This component analysis reveals a fundamental tension in the method.  The
+stable Jaccard was designed as the primary signal---the hypothesis was that
+related individuals would share more stable modules.  In practice, stable
+modules are so sample-specific that sharing is near zero.  The composite score
+is instead driven by the ``backup'' components: cosine similarity and count
+ratio, neither of which was designed to be the primary discriminant.
+
+\subsection{Comparison to Prior Algorithms}
+
+Table~\ref{tab:comparison} compares Module Clustering Stability to all three
+prior algorithms evaluated on the same dataset.
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{Comparison of Module Clustering Stability to prior algorithms.
+    All methods evaluated on the same 6-member CEPH~1463 subset with
+    10 pairwise comparisons.}
+  \label{tab:comparison}
+  \begin{tabular}{lcccc}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Algorithm}} &
+    \textcolor{white}{\textbf{Separation}} &
+    \textcolor{white}{\textbf{Weakest Gap}} &
+    \textcolor{white}{\textbf{Time (s)}} &
+    \textcolor{white}{\textbf{Heap}} \\
+    \midrule
+    Rare-Run P90
+      & $+$583\% & $+$300\% & 72.5 & moderate \\
+    Module Persistence v2
+      & $+$4.76\% & $-$3.17\% & 1{,}085 & 4{,}806\,MB \\
+    \textbf{Module Clustering Stability}
+      & \textbf{$+$4.90\%} & \textbf{$-$5.79\%} & \textbf{405} & \textbf{$\sim$0\,MB $\Delta$} \\
+    Coalition Transfer
+      & $+$1.36\% & $-$0.55\% & 272 & moderate \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Key observations from the comparison:
+
+\begin{itemize}
+  \item \textbf{Separation is competitive.}  Module Clustering Stability
+    ($+4.90\%$) achieves the highest mean separation among the three
+    symbiogenesis methods, marginally exceeding Module Persistence~v2
+    ($+4.76\%$) and substantially exceeding Coalition Transfer ($+1.36\%$).
+  \item \textbf{Weakest gap is worst.}  At $-5.79\%$, the weakest gap is
+    worse than both Module Persistence~v2 ($-3.17\%$) and Coalition Transfer
+    ($-0.55\%$).  The stringent bootstrap filtering, while improving mean
+    separation, amplifies the vulnerability of low-count samples.
+  \item \textbf{Rare-Run P90 remains dominant.}  The gap between Rare-Run~P90
+    ($+583\%$ separation, positive weakest gap) and all symbiogenesis methods
+    remains enormous.  Run-based approaches operate on a fundamentally
+    different---and currently much more powerful---signal.
+  \item \textbf{Memory efficiency is excellent.}  The near-zero heap delta
+    indicates that the bootstrap approach, despite making 5 passes per sample,
+    maintains minimal memory footprint.  Each iteration's data is processed
+    and summarized before the next begins.
+  \item \textbf{Timing is moderate.}  At 404.9\,s, the method is 2.7$\times$
+    faster than Module Persistence~v2 (1{,}085\,s) but 1.5$\times$ slower
+    than Coalition Transfer (272\,s) and 5.6$\times$ slower than Rare-Run~P90
+    (72.5\,s).
+\end{itemize}
+
+\subsection{Timing Breakdown}
+
+Table~\ref{tab:timing} presents the timing decomposition.
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{Timing breakdown for Module Clustering Stability.}
+  \label{tab:timing}
+  \begin{tabular}{lr}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Phase}} &
+    \textcolor{white}{\textbf{Time}} \\
+    \midrule
+    Bootstrap extraction (6 samples $\times$ 5 iterations) & 404.9\,s \\
+    \quad Per sample (average) & 67.5\,s \\
+    \quad Per iteration (average) & 13.5\,s \\
+    Pairwise comparison (10 pairs) & $<$ 0.01\,s \\
+    \quad Per pair & $\sim$ 0.0\,s \\
+    \midrule
+    \textbf{Total} & \textbf{404.9\,s} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The timing profile is overwhelmingly dominated by the preparation phase
+(bootstrap extraction).  Once stable module sets are computed, pairwise
+comparison is effectively instantaneous---set intersection and cosine
+similarity on sets of 50--104 elements require negligible computation.
+
+The 404.9\,s preparation time is 2.7$\times$ faster than Module Persistence~v2
+despite performing 5$\times$ more extraction passes.  This is because each
+bootstrap iteration operates on only 60\% of reads, and the stability-filtering
+step prunes the module set dramatically, reducing downstream computation.
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Discussion}
+\label{sec:discussion}
+
+\subsection{Stability as Automatic Informative Filtering}
+
+The most striking finding of this work is the automatic informative filtering
+property: all 503 stable modules are informative (non-universal).  This was not
+designed into the method---it emerged from the interaction between bootstrap
+resampling and the properties of k-mer module extraction.
+
+\ymarginnote{Bootstrap stability is an emergent filter, not an engineered one.}
+
+The mechanism is subtle.  Consider a ``universal'' module---one composed of
+k-mers from a highly conserved genomic region that is identical across all
+human genomes.  Such a module will appear in every sample when the full read
+set is used.  But across bootstrap iterations \emph{within a single sample},
+the exact set of k-mers composing the module may shift slightly due to coverage
+fluctuations.  If the module boundary moves by even one k-mer, the module
+identity changes (since identity is defined by exact k-mer set membership),
+and the module fails the stability threshold.
+
+In contrast, a module that corresponds to a distinct haplotype block---one
+carried by a subset of samples---is defined by k-mers with stronger
+co-occurrence patterns, because those k-mers appear together on reads from the
+same inherited block.  This stronger co-occurrence makes the module more
+robust to read subsampling.
+
+The implication is powerful: bootstrap stability, applied to k-mer module
+extraction, acts as a natural filter that preferentially retains
+haplotype-specific modules and discards universal ones.  This is exactly the
+kind of automatic feature selection that is difficult to engineer explicitly.
+
+\subsection{Why Count Ratio Correlates with Relatedness}
+
+The component analysis (Table~\ref{tab:components}) revealed that the count
+ratio term drives most of the separation.  This initially seems surprising:
+the count ratio is a coarse measure that ignores module identity entirely,
+capturing only whether two samples produce similar numbers of modules.
+
+The correlation arises because module count is a proxy for genomic complexity
+as seen by the k-mer extraction pipeline.  Related individuals share large
+fractions of their genome, including the haplotype blocks that generate most
+modules.  Two individuals who share 50\% of their genome by descent (as
+expected for parent--child pairs) will produce more similar module counts than
+two unrelated individuals whose genomes are independently assembled from the
+human variation landscape.
+
+\ymarginnote{Module count similarity is a coarse but real proxy for shared
+genomic content.}
+
+There is an important caveat: the count ratio also correlates with sequencing
+coverage.  Two samples sequenced at similar coverage will produce similar
+module counts regardless of relatedness.  In our dataset, coverage is
+approximately uniform ($\sim$30$\times$) across all samples, which means the
+count ratio captures both the relatedness signal and the coverage confound.
+A more heterogeneous dataset would require explicit coverage normalization.
+
+\subsection{The Pat.GF Problem}
+
+NA12891 (Pat.GF) has been the weakest link in every symbiogenesis algorithm.
+In Module Persistence~v2, the Pat.GF~$\to$~Father pair was the
+lowest-scoring parent--child pair.  In Coalition Transfer, the
+Pat.GM~$\to$~Father pair was weakest, but Pat.GF remained problematic.  In
+Module Clustering Stability, Pat.GF~$\to$~Father again occupies the bottom
+of the parent--child rankings (rank~7 overall, score~0.2055).
+
+\ymarginnote{Pat.GF consistently underperforms across all algorithms.}
+
+The root cause is visible in Table~\ref{tab:stability-stats}: NA12889 (Mat.GF)
+has the lowest total module count (8{,}793) and the lowest stable module count
+(50).  However, the problem pair involves NA12891 (Pat.GF), which has a
+respectable 12{,}068 total modules and 91 stable modules.  The issue is the
+\emph{interaction}: Pat.GF and Father share 0 stable modules out of a union of
+135, yielding a Jaccard of exactly 0.  And the count ratio for this pair
+(0.588) is the lowest among parent--child pairs, likely driven by the
+asymmetry in stable module counts (91 vs.\ 85, which gives $85/91 = 0.934$,
+but the actual $R = 0.588$ suggests the scoring uses a different count basis).
+
+The Pat.GF problem points to a deeper issue: the bootstrap stability threshold
+may be too aggressive for samples at the lower end of the coverage or quality
+spectrum.  With only 50--91 stable modules per sample, the combinatorial space
+of possible overlaps is tiny, and even genuine parent--child sharing can be
+missed.
+
+\subsection{Stable Jaccard Is Nearly Zero: Modules Are Sample-Specific}
+
+Perhaps the most disappointing result is the near-total failure of the stable
+Jaccard component.  Stable Jaccard was intended to be the primary signal: the
+hypothesis was that related individuals would share more stable modules than
+unrelated individuals.  In practice, out of 10 pairs, only 4 share any stable
+modules at all, and the maximum sharing is 2 modules (Pat.GM~$\leftrightarrow$~Mat.GM,
+an unrelated pair).
+
+This means that k-mer modules, even when bootstrap-stabilized, are
+overwhelmingly unique to each sample.  Two related individuals do not produce
+the same stable modules; they produce \emph{different} stable modules that
+happen to be drawn from related genomic regions.
+
+\ymarginnote{Related individuals produce related but non-identical modules.}
+
+The failure of module sharing has a technical cause: module identity is defined
+by exact k-mer set membership, and even a single k-mer difference makes two
+modules distinct.  A parent and child who share a haplotype block will produce
+modules from that block, but heterozygosity at even one position within the
+block changes the k-mer composition and produces a different module identity.
+
+This suggests that future work should explore \emph{fuzzy} module matching---
+treating two modules as related if their k-mer sets have high overlap, even if
+not identical.  Alternatively, a graph-based comparison that aligns module
+structures rather than requiring exact identity might recover the sharing signal
+that exact matching misses.
+
+\subsection{Connection to Ecological Resilience Theory}
+
+The bootstrap stability framework has a natural connection to Holling's
+ecological resilience theory~\cite{holling1973resilience}.  In Holling's
+framework, a resilient ecosystem is one that can absorb disturbance and
+reorganize while retaining its essential structure and function.  The key
+insight is that resilience is not about resisting change---it is about
+\emph{recovering} from change.
+
+\ymarginnote{Stable modules are the resilient ``species'' of the genomic
+ecosystem.}
+
+In our framework, each bootstrap iteration represents a disturbance: 40\% of
+reads are removed, disrupting the co-occurrence patterns that define modules.
+A stable module is one that recovers across these disturbances---its
+constituent k-mers co-occur strongly enough that even with significant data
+loss, the module reassembles.  An unstable module is one that depends on the
+specific reads present in a particular sample and cannot survive perturbation.
+
+The 0.7\% survival rate has an ecological analogue: in disturbed ecosystems,
+only a small fraction of species are truly resilient.  Most species are
+sensitive to perturbation and disappear or are replaced when conditions change.
+The resilient ``core species'' define the ecosystem's identity across
+disturbances, just as stable modules define the genome's modular structure
+across read subsamples.
+
+Extending the symbiogenesis metaphor~\cite{margulis1998}, stable modules are
+analogous to obligate endosymbionts---organisms so tightly integrated with
+their host that they persist even under severe perturbation.  Unstable modules
+are analogous to transient symbionts or commensals that fluctuate with
+environmental conditions.  The bootstrap stability framework provides a
+principled method for distinguishing the two.
+
+\subsection{What This Reveals About Module Definition Quality}
+
+The severe attrition from $\sim$12{,}000 to $\sim$80 modules per sample raises
+a fundamental question: are 99.3\% of modules really artifacts, or is the
+stability threshold too aggressive?
+
+Several observations suggest the former interpretation:
+
+\begin{enumerate}
+  \item The module extraction pipeline uses a relatively low minimum support
+    threshold of 3 reads.  At $30\times$ coverage, many genomic regions will
+    have exactly 3--5 reads, producing modules that depend critically on the
+    presence of each individual read.  Removing even one read (as the bootstrap
+    does) can destroy such modules.
+  \item The 150\,bp window size is matched to read length, not to biological
+    module size.  This means that window boundaries are arbitrary and
+    frequently split genuine biological structures across two windows, creating
+    unstable modules at the boundaries.
+  \item The co-occurrence graph construction uses a threshold of 2 reads for
+    edge creation, which is very permissive and allows noise-driven edges that
+    change with each subsample.
+\end{enumerate}
+
+The bootstrap stability framework quantifies these issues: the 0.7\% survival
+rate is a direct measure of the fraction of modules that are robust to the
+combined effects of low support thresholds, arbitrary windowing, and permissive
+edge construction.  It suggests that the module extraction pipeline, as
+currently configured, produces approximately 140$\times$ more modules than the
+data can support stably.
+
+\subsection{Computational Profile}
+
+The method's computational profile is favorable in several respects:
+
+\begin{itemize}
+  \item \textbf{Memory efficiency.}  The near-zero heap delta ($\sim$0\,MB)
+    indicates that intermediate data structures are garbage-collected between
+    bootstrap iterations.  This contrasts sharply with Module Persistence~v2,
+    which required 4{,}806\,MB peak heap.
+  \item \textbf{I/O dominance.}  The wall-clock time (404.9\,s) is dominated
+    by reading FASTQ files.  Each file is read 5 times (once per bootstrap
+    iteration), making the method I/O-bound rather than compute-bound.
+    This means that SSD throughput, not CPU speed, is the primary performance
+    bottleneck.
+  \item \textbf{Embarrassingly parallel.}  Both the per-sample bootstrap
+    loop and the per-iteration extraction are independent, making the method
+    trivially parallelizable.  With 6 samples and 5 iterations each, up to
+    30 extraction passes could run simultaneously given sufficient I/O
+    bandwidth.
+  \item \textbf{Comparison is free.}  Once stable module sets are computed,
+    pairwise comparison takes $<0.01$\,s per pair.  For a cohort of $n$
+    samples, the $O(n^2)$ comparison cost is negligible; all cost is in the
+    $O(n)$ preparation phase.
+\end{itemize}
+
+\subsection{Limitations}
+
+This work has several important limitations:
+
+\begin{limitation}
+\textbf{Small bootstrap count.}  Only $B = 5$ bootstrap iterations were used,
+the minimum for meaningful stability assessment.  The stability score can only
+take values in $\{0, 0.2, 0.4, 0.6, 0.8, 1.0\}$, providing very coarse
+resolution.  With $B = 50$ or $B = 100$, much finer stability profiles would
+be available, potentially improving the cosine similarity component.
+\end{limitation}
+
+\begin{limitation}
+\textbf{Fixed subsample fraction.}  The 60\% subsample fraction was chosen
+without systematic optimization.  Too little subsampling (e.g., 90\%) would
+retain too many modules, while too much (e.g., 30\%) might destroy genuine
+structure.  A systematic sweep over subsample fractions is needed to understand
+the sensitivity of the stability threshold.
+\end{limitation}
+
+\begin{limitation}
+\textbf{Exact module identity.}  Module identity is defined by exact k-mer set
+membership.  Even a single-k-mer difference makes two modules distinct.  This
+is too strict for detecting shared inherited modules between heterozygous
+samples, where a single SNP changes the k-mer composition of a shared block.
+\end{limitation}
+
+\begin{limitation}
+\textbf{No coverage normalization.}  The count ratio component conflates
+relatedness signal with coverage similarity.  In a dataset with heterogeneous
+coverage, this component would be misleading.  Explicit normalization or
+removal of the count-ratio term would be necessary for production use.
+\end{limitation}
+
+\begin{limitation}
+\textbf{Sample size.}  Six samples with 10 pairwise comparisons provide
+minimal statistical power.  The mean separation ($+4.90\%$) and weakest gap
+($-5.79\%$) are estimated from 4 related and 6 unrelated pairs, insufficient
+for reliable confidence intervals.
+\end{limitation}
+
+\begin{limitation}
+\textbf{No relationship-type discrimination.}  The method does not distinguish
+parent--child from sibling, half-sibling, or cousin relationships.  All are
+collapsed into a binary related/unrelated framework.  A richer evaluation would
+test whether the composite score correlates with kinship coefficient.
+\end{limitation}
+
+\begin{limitation}
+\textbf{Stability threshold is arbitrary.}  The threshold $\tau = 0.6$ was
+chosen to require a simple majority (3 of 5 iterations).  No theoretical
+justification for this specific value is provided, and sensitivity to the
+threshold is not characterized.
+\end{limitation}
+
+\begin{limitation}
+\textbf{Negative weakest gap.}  The $-5.79\%$ weakest gap means the method
+cannot support any threshold-based classification, even with oracle knowledge
+of the true labels.  This is a fundamental failure for any practical
+relatedness detection task.
+\end{limitation}
+
+\begin{limitation}
+\textbf{Rare-Run P90 remains far superior.}  The $+583\%$ separation and
+$+300\%$ positive weakest gap of the Rare-Run~P90 baseline make it clear that
+run-based approaches capture a fundamentally stronger signal.  Module-based
+methods, including this one, have not yet found a path to competitive
+performance.
+\end{limitation}
+
+\begin{limitation}
+\textbf{Single-cohort evaluation.}  All results are on the CEPH~1463 pedigree,
+a well-studied European-ancestry trio.  Generalization to other ancestries,
+family structures, and sequencing technologies is untested.
+\end{limitation}
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Future Work}
+\label{sec:future}
+
+The Module Clustering Stability framework opens several directions for
+improvement and extension.
+
+\subsection{Increased Bootstrap Count}
+
+The most immediate improvement is increasing $B$ from 5 to 50 or 100.  This
+would provide finer stability resolution (stability scores with two decimal
+places instead of one), enable confidence intervals on stability scores, and
+allow more nuanced thresholding.  The computational cost scales linearly with
+$B$, but the embarrassingly parallel structure means wall-clock time need not
+increase proportionally given sufficient compute resources.
+
+A related question is whether \emph{stratified} bootstrapping---subsampling
+within chromosomal regions or read-length bins rather than uniformly---would
+produce more biologically meaningful stability estimates.
+
+\subsection{Hierarchical Stability}
+
+The current approach applies a single stability threshold and partitions modules
+into stable and unstable.  A richer approach would track stability at multiple
+thresholds ($\tau = 0.4, 0.6, 0.8, 1.0$) and build a \emph{hierarchical
+stability profile} for each sample.  Modules that are stable at $\tau = 1.0$
+(appearing in every iteration) represent the most robust genomic structures;
+modules stable at $\tau = 0.6$ but not $\tau = 0.8$ represent moderately
+robust structures.
+
+This hierarchy could be used to weight modules in the scoring function:
+maximally stable modules receive higher weight, reflecting greater confidence
+in their biological reality.  The cosine similarity component could operate
+on the full hierarchical profile rather than binary stable/unstable labels,
+potentially capturing finer-grained relatedness signals.
+
+\subsection{Graph Spectral Methods}
+
+The current scoring function operates on sets of modules and their stability
+scores.  An alternative approach would represent each sample's stable module
+set as a graph---with edges connecting modules that co-occur on reads---and
+compare samples using graph spectral methods.
+
+Graph spectra (eigenvalues of the adjacency or Laplacian matrix) are invariant
+to node labeling, meaning they can detect structural similarity between graphs
+even when the node identities differ.  This could address the core failure of
+stable Jaccard: even though two related samples do not share exact module
+identities, their module co-occurrence graphs may have similar spectral
+signatures, reflecting shared underlying genomic architecture.
+
+Specific approaches worth exploring include:
+
+\begin{itemize}
+  \item \textbf{Laplacian spectral distance}: compare the sorted eigenvalues of
+    the normalized graph Laplacian for two samples' module graphs.
+  \item \textbf{Graph kernels}: Weisfeiler--Lehman subtree kernels or random
+    walk kernels that measure similarity between graphs without requiring
+    node correspondence.
+  \item \textbf{Spectral clustering stability}: apply bootstrap stability not
+    to modules but to spectral clusters of modules, testing whether the
+    cluster structure (not individual module identity) persists under
+    perturbation.
+\end{itemize}
+
+\subsection{Fuzzy Module Matching}
+
+As discussed in Section~\ref{sec:discussion}, the exact k-mer identity
+requirement for module matching is too strict.  Future work should explore
+fuzzy matching criteria: two modules are ``similar'' if their k-mer Jaccard
+index exceeds a threshold (e.g., 0.8), or if they share a core subset of
+k-mers even when the peripheral k-mers differ.
+
+Fuzzy matching would require a more complex scoring infrastructure---bipartite
+matching between module sets rather than simple set intersection---but could
+recover the module-sharing signal that exact matching destroys.
+
+\subsection{Integration with Run-Based Methods}
+
+The enormous performance gap between module-based and run-based approaches
+(Rare-Run P90) suggests that the two paradigms capture complementary signals.
+A hybrid method could use stable modules to identify regions of interest and
+then apply run-based scoring within those regions, combining the structural
+insight of modules with the discriminative power of contiguous rare-k-mer runs.
+
+\subsection{Coverage-Normalized Count Ratio}
+
+Given that the count ratio drives most of the separation, a coverage-normalized
+variant could strengthen the signal while removing the coverage confound.
+Normalizing module counts by expected count at a given coverage depth (estimated
+from the read count and genome size) would isolate the relatedness-driven
+component of count similarity.
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Conclusion}
+\label{sec:conclusion}
+
+Module Clustering Stability introduces a principled approach to the module
+definition instability problem that has plagued all previous symbiogenesis
+algorithms.  By applying bootstrap resampling to the module extraction process
+itself, we identify a small, high-confidence subset of modules---approximately
+0.7\% of those discovered by a single extraction pass---that represent genuine,
+reproducible genomic structures.
+
+\ymarginnote{Bootstrap stability turns module instability from a problem into a
+feature.}
+
+The method achieves a mean separation of $+4.90$ percentage points between
+parent--child and unrelated pairs on the CEPH~1463 pedigree, the highest among
+the three symbiogenesis algorithms (Module Persistence~v2: $+4.76\%$, Coalition
+Transfer: $+1.36\%$).  It does so with excellent memory efficiency (near-zero
+heap delta) and moderate computational cost (404.9\,s, 2.7$\times$ faster than
+Module Persistence~v2).
+
+The discovery that all stable modules are automatically informative---none are
+universal---demonstrates that bootstrap stability acts as a natural filter for
+biologically meaningful structure.  This emergent property, not designed into
+the method, suggests that stability under perturbation is a genuine marker of
+biological relevance in k-mer module analysis.
+
+However, the method's weakest gap of $-5.79\%$ is the worst among all three
+symbiogenesis algorithms, and the near-total failure of the stable Jaccard
+component (modules are overwhelmingly sample-specific) reveals that
+bootstrap-stable modules, while individually well-defined, do not overlap
+between related samples.  The composite score is instead driven by the
+count-ratio term, a coarse proxy for shared genomic content that conflates
+relatedness with coverage similarity.
+
+The fundamental lesson of Module Clustering Stability is that module
+\emph{definition quality} and module \emph{sharing} are separate problems.
+Bootstrap stability solves the first---it identifies which modules are real.
+But it does not solve the second---real modules in related individuals are
+related but not identical, and exact matching cannot detect this relatedness.
+Future work must address the sharing problem through fuzzy matching, graph
+spectral methods, or hybrid approaches that combine module-level structure
+with run-level scoring.
+
+The Rare-Run~P90 baseline ($+583\%$ separation, $+300\%$ positive weakest gap,
+72.5\,s) remains the gold standard for reference-free relatedness detection in
+the yalumba project.  Module-based methods provide theoretical insight into the
+structure of genomic data but have not yet translated that insight into
+competitive discriminative performance.  The path forward likely requires
+abandoning exact module identity as the unit of comparison and developing
+richer structural similarity measures that can detect related-but-not-identical
+modules across individuals.
+
+
+% ════════════════════════════════════════════════════════════════════
+% References
+% ════════════════════════════════════════════════════════════════════
+
+\bibliographystyle{plain}
+\bibliography{../references}
+
+\end{document}

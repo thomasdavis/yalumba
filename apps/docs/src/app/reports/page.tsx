@@ -3,6 +3,14 @@ import { Section } from "@/components/section";
 
 const reports = [
   {
+    slug: "module-stability-2026-04",
+    title: "Module Clustering Stability: Bootstrap Perturbation as a Symbiogenesis-Native Signal",
+    date: "April 2026",
+    abstract: "Third symbiogenesis algorithm using bootstrap resampling to identify stable genomic modules. Only 0.7% of modules survive resampling — and ALL stable modules are automatically informative (none universal). Best symbiogenesis separation at +4.90% but weakest gap -5.79%. Count ratio (similar stable module counts) emerges as the strongest signal component.",
+    authors: "yalumba project",
+    tags: ["module stability", "bootstrap", "symbiogenesis", "perturbation", "CEPH 1463"],
+  },
+  {
     slug: "coalition-transfer-2026-04",
     title: "Coalition Transfer: Composite Inheritance Units for Reference-Free Relatedness Detection",
     date: "April 2026",
