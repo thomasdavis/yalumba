@@ -38,6 +38,8 @@ const STABILITY_THRESHOLD = 0.4; // Motif must be in a module in >40% of bootstr
 interface MotifStabilityProfile {
   /** Motif hash → fraction of bootstraps where it appeared in ANY module */
   motifStability: Map<number, number>;
+  /** Motif hash → cumulative module support across all bootstraps */
+  motifSupport: Map<number, number>;
   /** Motifs that pass the stability threshold */
   stableMotifs: Set<number>;
   /** Total unique motifs seen in modules across all bootstraps */
@@ -136,40 +138,30 @@ export const moduleStability: SymbioAlgorithm = {
     }
     const rarityJaccard = rarityDenom > 0 ? rarityNumer / rarityDenom : 0;
 
-    // ── Score 2: Stability-magnitude rarity Jaccard ──
-    // Like rarity Jaccard, but each shared motif is additionally
-    // weighted by min(stability_A, stability_B). This rewards motifs
-    // that are HIGHLY stable in both samples AND rare — a stronger
-    // genetic inheritance signal than mere binary presence.
-    let stabRarNumer = 0;
-    let stabRarDenom = 0;
+    // ── Score 2: Support cosine over informative stable motifs ──
+    // Use cumulative module support (sum across bootstraps) as the
+    // signal vector, like module-persistence's supportCosine.
+    // Support varies much more than stability, giving better
+    // discrimination between related and unrelated pairs.
+    let dot = 0, normA = 0, normB = 0;
     for (const motif of ctx.informativeMotifs) {
-      const inA = profA.stableMotifs.has(motif);
-      const inB = profB.stableMotifs.has(motif);
-      if (inA || inB) {
-        const count = ctx.motifPresenceCount.get(motif) ?? ctx.sampleCount;
-        const rarity = Math.log(ctx.sampleCount / count);
-        const sa = profA.motifStability.get(motif) ?? 0;
-        const sb = profB.motifStability.get(motif) ?? 0;
-        // Max possible contribution per motif for the denominator
-        const maxStab = Math.max(sa, sb);
-        stabRarDenom += maxStab * rarity;
-        if (inA && inB) {
-          // Shared: use min stability as the weight
-          stabRarNumer += Math.min(sa, sb) * rarity;
-        }
-      }
+      const va = profA.motifSupport.get(motif) ?? 0;
+      const vb = profB.motifSupport.get(motif) ?? 0;
+      dot += va * vb;
+      normA += va * va;
+      normB += vb * vb;
     }
-    const stabRarJaccard = stabRarDenom > 0 ? stabRarNumer / stabRarDenom : 0;
+    const denom = Math.sqrt(normA) * Math.sqrt(normB);
+    const supportCosine = denom > 0 ? dot / denom : 0;
 
     // ── Combined score ──
-    // Both signals reward rare shared motifs; the stability-magnitude
-    // version additionally penalizes motifs with asymmetric stability
-    const score = rarityJaccard * 0.55 + stabRarJaccard * 0.45;
+    // Rarity Jaccard for rare shared module membership;
+    // Support cosine for correlated module depth signal
+    const score = rarityJaccard * 0.55 + supportCosine * 0.45;
 
     return {
       score,
-      detail: `rarJacc=${sharedStable}/${unionStable} (${(rarityJaccard * 100).toFixed(1)}%) stabRar=${(stabRarJaccard * 100).toFixed(1)}% stableA=${profA.stableMotifs.size} stableB=${profB.stableMotifs.size}`,
+      detail: `rarJacc=${sharedStable}/${unionStable} (${(rarityJaccard * 100).toFixed(1)}%) supCos=${supportCosine.toFixed(4)} stableA=${profA.stableMotifs.size} stableB=${profB.stableMotifs.size}`,
     };
   },
 };
@@ -178,6 +170,8 @@ export const moduleStability: SymbioAlgorithm = {
 function buildMotifStabilityProfile(reads: readonly string[]): MotifStabilityProfile {
   // Track: motif hash → how many bootstraps it appeared in a module
   const motifAppearances = new Map<number, number>();
+  // Track: motif hash → cumulative support across all bootstraps
+  const motifSupportAccum = new Map<number, number>();
   const allMotifs = new Set<number>();
 
   for (let b = 0; b < NUM_BOOTSTRAPS; b++) {
@@ -190,27 +184,33 @@ function buildMotifStabilityProfile(reads: readonly string[]): MotifStabilityPro
       minCohesion: 0.25,
     });
 
-    // Collect all unique motifs that appeared in ANY module this bootstrap
-    const bootstrapMotifs = new Set<number>();
+    // Collect all unique motifs with their MAX support this bootstrap
+    const bootstrapMotifSupport = new Map<number, number>();
     for (const mod of modules) {
       for (const member of mod.members) {
-        bootstrapMotifs.add(member);
         allMotifs.add(member);
+        const prev = bootstrapMotifSupport.get(member) ?? 0;
+        if (mod.support > prev) {
+          bootstrapMotifSupport.set(member, mod.support);
+        }
       }
     }
 
-    for (const motif of bootstrapMotifs) {
+    for (const [motif, support] of bootstrapMotifSupport) {
       motifAppearances.set(motif, (motifAppearances.get(motif) ?? 0) + 1);
+      motifSupportAccum.set(motif, (motifSupportAccum.get(motif) ?? 0) + support);
     }
   }
 
   // Compute stability scores per motif
   const motifStability = new Map<number, number>();
+  const motifSupport = new Map<number, number>();
   const stableMotifs = new Set<number>();
 
   for (const [motif, appearances] of motifAppearances) {
     const stability = appearances / NUM_BOOTSTRAPS;
     motifStability.set(motif, stability);
+    motifSupport.set(motif, motifSupportAccum.get(motif) ?? 0);
     if (stability >= STABILITY_THRESHOLD) {
       stableMotifs.add(motif);
     }
@@ -221,6 +221,7 @@ function buildMotifStabilityProfile(reads: readonly string[]): MotifStabilityPro
 
   return {
     motifStability,
+    motifSupport,
     stableMotifs,
     totalMotifs,
     stableFraction,

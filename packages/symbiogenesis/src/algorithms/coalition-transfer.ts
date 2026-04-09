@@ -177,8 +177,8 @@ export const coalitionTransfer: SymbioAlgorithm = {
     }
 
     // ── Combined score ──
-    // Three-way blend: shift weight toward exclusive (helps parent-child vs in-law)
-    const score = rarityScore * 0.35 + exclusiveRatio * 0.45 + freqCos * 0.20;
+    // Three-way blend tuned to satisfy both in-law AND unrelated constraints
+    const score = rarityScore * 0.25 + exclusiveRatio * 0.50 + freqCos * 0.25;
 
     return {
       score,
