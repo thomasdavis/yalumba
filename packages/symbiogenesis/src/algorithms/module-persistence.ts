@@ -1,103 +1,171 @@
 /**
- * Algorithm Family 1: Module Persistence Graph
+ * Algorithm Family 1: Module Persistence Graph (v2)
  *
- * Construct a module graph for each sample:
- *   - Nodes = motif clusters (modules) that repeatedly co-occur
- *   - Edges = module adjacency patterns observed across reads
+ * Key fix from v1: build a SHARED module vocabulary across all samples,
+ * then map each sample's reads to that vocabulary. This ensures the same
+ * biological module gets the same ID across all samples.
+ *
+ * Additionally: filter to modules that are NOT universal (present in
+ * fewer than all samples) — these carry ancestry signal, analogous
+ * to how rare k-mers carry more signal than common ones.
  *
  * Compare samples by:
- *   - Shared module identities (same motif clusters exist)
- *   - Shared edge topology (same modules appear adjacent)
- *   - Edge weight correlation (same adjacency frequencies)
- *
- * Hypothesis: related individuals share not just modules,
- * but the INTERACTION TOPOLOGY between modules — the way
- * inherited genomic blocks are arranged relative to each other.
- *
- * This is genuinely symbiogenesis-native because the signal
- * comes from module RELATIONSHIPS, not individual markers.
+ *   1. Shared informative module identities
+ *   2. Shared edge topology (module adjacency patterns)
+ *   3. Module support correlation (similar usage frequencies)
  */
 
 import type { SymbioAlgorithm, SampleReads, ComparisonScore } from "../types.js";
 import { buildModules, buildModuleGraph } from "@yalumba/modules";
-import type { ModuleGraph } from "@yalumba/modules";
+import type { Module, ModuleGraph } from "@yalumba/modules";
 
 interface PreparedContext {
+  /** Shared module vocabulary (union across all samples) */
+  sharedModules: Module[];
+  /** Per-sample: which shared modules are present + their local support */
+  samplePresence: Map<string, Map<number, number>>;
+  /** Per-sample module graphs using shared module IDs */
   graphs: Map<string, ModuleGraph>;
+  /** Modules present in fewer than all samples (informative) */
+  informativeModuleIds: Set<number>;
 }
 
 export const modulePersistence: SymbioAlgorithm = {
   name: "Module persistence graph",
-  version: 1,
-  description: "Compare module interaction topology — shared graph edges indicate co-inherited genomic architecture",
+  version: 2,
+  description: "Shared module vocabulary + informative module filtering — graph topology of co-inherited modules",
   family: "module-persistence",
   maxReadsPerSample: 50_000,
 
   prepare(samples): PreparedContext {
-    console.log("    [module-persistence] Building module graphs...");
-    const graphs = new Map<string, ModuleGraph>();
+    const t0 = performance.now();
+
+    // ── Step 1: Build modules per sample ──
+    console.log("    [v2] Step 1: Extract modules per sample...");
+    const perSampleModules = new Map<string, Module[]>();
 
     for (const sample of samples) {
-      const t0 = performance.now();
-      console.log(`      ${sample.id}: extracting modules...`);
-
-      // Phase 1: Discover modules
+      const st = performance.now();
       const modules = buildModules(sample.reads, {
         motifK: 15,
         windowSize: 50,
         minSupport: 3,
         minCohesion: 0.3,
       });
-      console.log(`        ${modules.length} modules found (${((performance.now() - t0) / 1000).toFixed(1)}s)`);
+      perSampleModules.set(sample.id, modules);
+      console.log(`      ${sample.id}: ${modules.length} modules (${((performance.now() - st) / 1000).toFixed(1)}s)`);
+    }
 
-      // Phase 2: Build graph
-      const t1 = performance.now();
-      const graph = buildModuleGraph(sample.reads, modules, 15);
-      console.log(`        ${graph.edges.length} edges, ${graph.modules.length} nodes (${((performance.now() - t1) / 1000).toFixed(1)}s)`);
+    // ── Step 2: Build shared module vocabulary ──
+    // Union all modules, deduplicate by member fingerprint
+    console.log("    [v2] Step 2: Building shared module vocabulary...");
+    const fpToModule = new Map<number, Module>();
+    let sharedId = 0;
 
+    for (const [, modules] of perSampleModules) {
+      for (const mod of modules) {
+        const fp = moduleFingerprint(mod.members);
+        if (!fpToModule.has(fp)) {
+          fpToModule.set(fp, { ...mod, id: sharedId++ });
+        }
+      }
+    }
+
+    const sharedModules = [...fpToModule.values()];
+    console.log(`      ${sharedModules.length} unique modules in shared vocabulary`);
+
+    // ── Step 3: Map each sample to shared vocabulary ──
+    console.log("    [v2] Step 3: Mapping samples to shared vocabulary...");
+    const samplePresence = new Map<string, Map<number, number>>();
+
+    for (const [sampleId, modules] of perSampleModules) {
+      const presence = new Map<number, number>();
+      for (const mod of modules) {
+        const fp = moduleFingerprint(mod.members);
+        const sharedMod = fpToModule.get(fp);
+        if (sharedMod) {
+          presence.set(sharedMod.id, mod.support);
+        }
+      }
+      samplePresence.set(sampleId, presence);
+      console.log(`      ${sampleId}: ${presence.size} shared modules present`);
+    }
+
+    // ── Step 4: Identify informative modules (not universal) ──
+    const modulePresenceCount = new Map<number, number>();
+    for (const [, presence] of samplePresence) {
+      for (const modId of presence.keys()) {
+        modulePresenceCount.set(modId, (modulePresenceCount.get(modId) ?? 0) + 1);
+      }
+    }
+
+    const informativeModuleIds = new Set<number>();
+    for (const [modId, count] of modulePresenceCount) {
+      // Informative = not in ALL samples (like rare k-mers)
+      if (count < samples.length) {
+        informativeModuleIds.add(modId);
+      }
+    }
+    console.log(`      ${informativeModuleIds.size} informative modules (of ${sharedModules.length} total)`);
+
+    // ── Step 5: Build graphs using shared vocabulary ──
+    console.log("    [v2] Step 5: Building module graphs...");
+    const graphs = new Map<string, ModuleGraph>();
+    for (const sample of samples) {
+      const graph = buildModuleGraph(sample.reads, sharedModules, 15);
       graphs.set(sample.id, graph);
     }
 
-    return { graphs };
+    console.log(`    [v2] Total prep: ${((performance.now() - t0) / 1000).toFixed(1)}s`);
+    return { sharedModules, samplePresence, graphs, informativeModuleIds };
   },
 
   compare(a: SampleReads, b: SampleReads, context: unknown): ComparisonScore {
-    const { graphs } = context as PreparedContext;
-    const graphA = graphs.get(a.id)!;
-    const graphB = graphs.get(b.id)!;
+    const ctx = context as PreparedContext;
+    const presA = ctx.samplePresence.get(a.id)!;
+    const presB = ctx.samplePresence.get(b.id)!;
+    const graphA = ctx.graphs.get(a.id)!;
+    const graphB = ctx.graphs.get(b.id)!;
 
-    // Strategy 1: Module identity overlap
-    // Build fingerprints from module member sets
-    const fpA = new Set<number>();
-    for (const mod of graphA.modules) {
-      fpA.add(moduleFingerprint(mod.members));
+    // ── Score 1: Informative module overlap (Jaccard) ──
+    let sharedInformative = 0;
+    let unionInformative = 0;
+    for (const modId of ctx.informativeModuleIds) {
+      const inA = presA.has(modId);
+      const inB = presB.has(modId);
+      if (inA && inB) sharedInformative++;
+      if (inA || inB) unionInformative++;
     }
-    const fpB = new Set<number>();
-    for (const mod of graphB.modules) {
-      fpB.add(moduleFingerprint(mod.members));
-    }
+    const infoJaccard = unionInformative > 0 ? sharedInformative / unionInformative : 0;
 
-    let sharedModules = 0;
-    for (const fp of fpA) { if (fpB.has(fp)) sharedModules++; }
-    const moduleUnion = fpA.size + fpB.size - sharedModules;
-    const moduleJaccard = moduleUnion > 0 ? sharedModules / moduleUnion : 0;
-
-    // Strategy 2: Edge topology overlap
-    // Build edge fingerprints from (module_fp_from, module_fp_to)
-    const edgeFpA = buildEdgeFingerprints(graphA);
-    const edgeFpB = buildEdgeFingerprints(graphB);
+    // ── Score 2: Edge topology overlap (informative edges only) ──
+    const edgeFpA = buildInformativeEdgeFPs(graphA, ctx.informativeModuleIds);
+    const edgeFpB = buildInformativeEdgeFPs(graphB, ctx.informativeModuleIds);
 
     let sharedEdges = 0;
     for (const efp of edgeFpA) { if (edgeFpB.has(efp)) sharedEdges++; }
     const edgeUnion = edgeFpA.size + edgeFpB.size - sharedEdges;
     const edgeJaccard = edgeUnion > 0 ? sharedEdges / edgeUnion : 0;
 
-    // Combined score: module overlap + edge topology
-    const score = moduleJaccard * 0.4 + edgeJaccard * 0.6;
+    // ── Score 3: Module support correlation ──
+    // For shared informative modules, compare their support values
+    let dot = 0, normA = 0, normB = 0;
+    for (const modId of ctx.informativeModuleIds) {
+      const va = presA.get(modId) ?? 0;
+      const vb = presB.get(modId) ?? 0;
+      dot += va * vb;
+      normA += va * va;
+      normB += vb * vb;
+    }
+    const denom = Math.sqrt(normA) * Math.sqrt(normB);
+    const supportCosine = denom > 0 ? dot / denom : 0;
+
+    // Combined: weight edge topology highest (most symbiogenesis-native)
+    const score = infoJaccard * 0.3 + edgeJaccard * 0.4 + supportCosine * 0.3;
 
     return {
       score,
-      detail: `modules=${sharedModules}/${moduleUnion} (${(moduleJaccard * 100).toFixed(2)}%) edges=${sharedEdges}/${edgeUnion} (${(edgeJaccard * 100).toFixed(2)}%)`,
+      detail: `infoMod=${sharedInformative}/${unionInformative} (${(infoJaccard * 100).toFixed(1)}%) edges=${sharedEdges}/${edgeUnion} (${(edgeJaccard * 100).toFixed(1)}%) cosine=${supportCosine.toFixed(4)}`,
     };
   },
 };
@@ -112,21 +180,14 @@ function moduleFingerprint(members: readonly number[]): number {
   return h >>> 0;
 }
 
-function buildEdgeFingerprints(graph: ModuleGraph): Set<number> {
+function buildInformativeEdgeFPs(graph: ModuleGraph, informative: Set<number>): Set<number> {
   const fps = new Set<number>();
-  const moduleFps = new Map<number, number>();
-  for (const mod of graph.modules) {
-    moduleFps.set(mod.id, moduleFingerprint(mod.members));
-  }
-
   for (const edge of graph.edges) {
-    const fromFp = moduleFps.get(edge.from) ?? 0;
-    const toFp = moduleFps.get(edge.to) ?? 0;
-    // Canonical edge: sort by fingerprint
-    const a = Math.min(fromFp, toFp);
-    const b = Math.max(fromFp, toFp);
+    // Only count edges where at least one module is informative
+    if (!informative.has(edge.from) && !informative.has(edge.to)) continue;
+    const a = Math.min(edge.from, edge.to);
+    const b = Math.max(edge.from, edge.to);
     fps.add(((a * 31) + b) >>> 0);
   }
-
   return fps;
 }
