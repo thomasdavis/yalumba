@@ -1,0 +1,2310 @@
+\documentclass{../yalumba}
+
+\usepackage{mathtools}
+\usepackage{bm}
+
+\title{Inherited Ecosystem Structure:\\A Spectral-Geometric Framework for\\Reference-Free Genomic Relatedness Detection}
+\author{yalumba project}
+\date{April 2026}
+\reportslug{theoretical-framework-2026-04}
+
+\setabstract{%
+We propose that biological relatedness between individuals can be detected
+by comparing the \emph{organizational structure} of their genomes rather than
+their \emph{sequence content}.  In our framework, each genome is modeled as
+a multi-scale ecosystem of interacting motif modules---groups of co-occurring
+$k$-mers that form coherent functional or structural units within sequencing
+reads.  We analyze this ecosystem via spectral geometry, constructing a
+labeled interaction graph whose nodes are modules and whose edges encode
+co-occurrence strength, then characterizing the graph through its Laplacian
+spectrum, heat kernel signatures, and ecological role assignments.
+Relatedness between two individuals is detected through \emph{structural
+correspondence}: a continuous coherence field $\Phi: G_A \to G_B$ that maps
+the ecosystem of one genome into the ecosystem of another, scored by how
+well this mapping preserves local neighbourhood geometry.  This is
+fundamentally different from identity-by-descent (IBD) methods, which
+compare shared sequence tokens---identical $k$-mers, shared haplotype
+segments, or concordant variant calls.  We have built a complete
+from-scratch compute stack (12 packages, ${\sim}15{,}000$ lines of
+TypeScript, custom GPU kernel pipeline) and tested more than 50 algorithms
+across three datasets: a synthetic family trio, the GIAB Ashkenazi trio,
+and the CEPH~1463 Platinum Pedigree (a three-generation, six-member
+family that constitutes the hardest benchmark for reference-free methods).
+Three key findings emerge from this systematic empirical program.
+\textbf{First}, token-matching methods---from naive $k$-mer Jaccard through
+sophisticated rare-run scanning---achieve strong separation on related versus
+unrelated pairs but converge toward classical IBD proxies: the best
+token method, rare-run P90, achieves $+583\%$ separation on CEPH~1463 and
+is mathematically equivalent to reference-free IBD without alignment.
+\textbf{Second}, structural methods---module persistence ($+3.36\%$),
+coalition transfer ($+1.97\%$), spectral ecology ($+4.93\%$), and module
+stability ($+4.90\%$ average but failing the weakest pair)---detect a
+genuinely different signal, inherited organizational patterns, but this
+signal is $100\times$ weaker than the rare-run signal and is confounded
+by sequencing coverage variation.  \textbf{Third}, the gap between
+structural and token methods has narrowed dramatically over six algorithm
+generations in the spectral ecology family: from complete failure
+($-26.87\%$ weakest gap in v1) through the spouse-confound breakthrough
+(v4, spouses dropped from rank~1 to rank~8) to near-parity ($-0.61\%$
+weakest gap in v7 via Sinkhorn-regularized transport with cooperative
+stability weighting).  We identify three theoretical barriers to further
+progress---coverage confounding, transport symmetry, and outlier
+sensitivity---and propose solutions rooted in optimal transport
+(Gromov--Wasserstein distance between ecosystem metric spaces), algebraic
+topology (persistent homology of co-occurrence filtrations), and
+differential geometry (gauge-theoretic field comparison via connection
+curvature).  These three directions represent qualitative mathematical
+leaps rather than incremental parameter tuning, and we argue that the
+strongest case for the ecosystem approach will come not from beating
+rare-run P90 at parent--child detection but from detecting relationships
+or organizational structures that token-based methods fundamentally
+cannot access.  This paper serves as a theoretical position statement for
+external feedback: we present the complete intellectual framework, the
+empirical trajectory, the open problems, and the proposed path forward.}
+
+\begin{document}
+\maketitle
+
+\tableofcontents
+\newpage
+
+
+% ════════════════════════════════════════════════════════════════════════
+% SECTION 1: INTRODUCTION
+% ════════════════════════════════════════════════════════════════════════
+\section{Introduction}
+\label{sec:intro}
+
+\subsection{The Reference-Free Relatedness Problem}
+\label{sec:intro:problem}
+
+Determining whether two individuals share recent common ancestors is a
+foundational problem in human genetics.  The standard pipeline requires
+multiple computationally expensive steps:
+
+\begin{enumerate}
+  \item \textbf{Alignment} to a reference genome (BWA-MEM, minimap2):
+    hours per sample, reference-dependent.
+  \item \textbf{Variant calling} (GATK HaplotypeCaller, DeepVariant):
+    hours per sample, model-dependent.
+  \item \textbf{Phasing} (SHAPEIT, Eagle): population-level, requires
+    reference panels.
+  \item \textbf{IBD detection} (GERMLINE~\cite{gusev2009germline},
+    Refined IBD~\cite{browning2013refinedibd},
+    IBIS~\cite{browning2020ibis}): segment matching on phased haplotypes.
+\end{enumerate}
+
+Each step introduces its own error modes and computational cost.
+Alignment is reference-biased~\cite{liao2025sv}.  Variant calling has
+systematic blind spots in repetitive regions.  Phasing requires large
+reference panels and introduces switch errors.  The result is a pipeline
+that works well for well-characterized populations with good reference
+genomes, but degrades for under-represented populations, non-model
+organisms, and metagenomic samples where no reference exists at all.
+
+\begin{pullquote}
+Can we detect relatedness directly from raw sequencing reads,
+without alignment, variant calling, or phasing?
+\end{pullquote}
+
+This is the reference-free relatedness problem.  Prior work has shown
+that $k$-mer sketching can estimate genomic distance
+(Mash~\cite{ondov2016mash}), that alignment-free phylogenetics is
+feasible~\cite{brinda2023phylogenetic}, and that reference-free
+relatedness estimation is possible in principle~\cite{fan2021reference}.
+Our contribution is a theoretical framework and systematic empirical
+program that goes beyond $k$-mer counting to propose a fundamentally
+different basis for comparison: the \emph{organizational structure} of
+the genome as a multi-scale ecosystem.
+
+\subsection{Two Paradigms for Genomic Comparison}
+\label{sec:intro:paradigms}
+
+We distinguish two paradigms that differ not in implementation details
+but in what \emph{mathematical object} is compared between individuals.
+
+\subsubsection{The Token Paradigm}
+
+Genomes are bags of discrete tokens: $k$-mers, variants, haplotype
+segments.  Relatedness is measured by shared tokens.  This is the
+classical view underlying all IBD-based methods.
+
+\begin{definition}
+\textbf{Token comparison.}  Given two genomes $G_A$ and $G_B$
+represented as sets of tokens $T_A$ and $T_B$, relatedness is a function
+$f(T_A \cap T_B, T_A \cup T_B)$.  The Jaccard coefficient,
+containment index, MinHash estimate, and IBD segment count are all
+instances of this pattern.
+\end{definition}
+
+Token methods are intuitive, well-understood, and effective.  They have
+a clear failure mode: they require tokens to be \emph{identical} across
+individuals.  In genomic data, heterozygosity means that $k$-mers
+within a shared IBD segment may differ at SNP positions.  At $k = 21$,
+a single heterozygous SNP destroys $21$ $k$-mers.  With a SNP rate
+of $\sim 0.1\%$ (one per $1{,}000$ bases), the probability that a
+21-mer is identical between two haplotypes is approximately
+$(1 - 0.001)^{21} \approx 0.979$.  This means ${\sim}2\%$ of $k$-mers
+are disrupted by heterozygosity even within truly shared segments.
+
+\subsubsection{The Ecosystem Paradigm (Our Proposal)}
+
+Genomes are organized systems of interacting elements.  Relatedness is
+measured by shared \emph{organizational structure}.  This does not
+require any element to be identical across individuals---only that the
+\emph{pattern of organization} is similar.
+
+\begin{definition}
+\textbf{Ecosystem comparison.}  Given two genomes $G_A$ and $G_B$
+represented as labeled interaction graphs $\mathcal{G}_A = (V_A, E_A,
+w_A, f_A)$ and $\mathcal{G}_B = (V_B, E_B, w_B, f_B)$, relatedness
+is a function of the structural correspondence between $\mathcal{G}_A$
+and $\mathcal{G}_B$: how well can the local neighbourhood geometry of
+one be mapped to the other?
+\end{definition}
+
+The ecosystem paradigm is more robust to noise (a few disrupted $k$-mers
+do not destroy the organizational structure) but harder to measure
+(structural correspondence is a richer and more ambiguous quantity than
+set intersection).  The central question of this research program is
+whether the additional robustness translates into practical advantage.
+
+\subsection{Symbiogenesis as Computational Metaphor}
+\label{sec:intro:symbiogenesis}
+
+Our framework draws on Lynn Margulis's theory of
+symbiogenesis~\cite{margulis1998}: the idea that complex life arose not
+through gradual mutation and selection alone, but through the
+\emph{merging of simpler organisms into cooperative wholes}.
+Mitochondria were once free-living bacteria; chloroplasts were once
+cyanobacteria.  The eukaryotic cell is a consortium, not a monolith.
+
+We apply this metaphor to genomic inheritance.  Each haplotype block
+inherited from a parent is an ``organism'' carrying its internal
+structure---its pattern of motif modules, their co-occurrence
+relationships, their spectral geometry.  During meiosis, these organisms
+recombine: maternal and paternal haplotype blocks interleave to form
+a new consortium.  The child's genome is a \emph{symbiogenetic merger} of
+parental organizational units.
+
+\begin{keyfinding}
+\textbf{The symbiogenesis metaphor predicts a specific testable
+quantity}: related individuals should share not just individual genomic
+elements but the \emph{cooperative structure} among those elements.
+Two genomes that inherited the same haplotype block from a common
+ancestor should exhibit the same local arrangement of motif modules---the
+same co-occurrence edges, the same spectral local geometry, the same
+ecological roles---within that block.
+\end{keyfinding}
+
+This prediction is what our coherence field framework attempts to test.
+
+\subsection{Contributions and Scope}
+\label{sec:intro:contributions}
+
+This paper presents:
+
+\begin{enumerate}
+  \item A \textbf{theoretical framework} that models genomes as labeled
+    interaction graphs and detects relatedness through spectral-geometric
+    structural correspondence (Section~\ref{sec:framework}).
+  \item A \textbf{comprehensive empirical survey} of 50+ algorithms
+    across three datasets, tracing the evolution from naive $k$-mer
+    overlap to sophisticated structural methods
+    (Section~\ref{sec:trajectory}).
+  \item A \textbf{formal analysis} of three theoretical barriers to
+    further progress (Sections~\ref{sec:directions}
+    and~\ref{sec:coverage}).
+  \item \textbf{Three proposed mathematical directions}---optimal
+    transport, persistent homology, and gauge-theoretic field
+    comparison---each representing a qualitative leap beyond current
+    methods (Section~\ref{sec:directions}).
+  \item An \textbf{honest assessment} of what works, what fails, and
+    where the ecosystem approach can or cannot compete with
+    token methods (Section~\ref{sec:openquestions}).
+\end{enumerate}
+
+The computational infrastructure underlying this work is a
+purpose-built monorepo (\texttt{yalumba}) containing 12 TypeScript
+packages, a custom SPIR-V GPU compilation pipeline, and
+${\sim}15{,}000$ lines of code written entirely from scratch with no
+external bioinformatics libraries.
+
+
+% ════════════════════════════════════════════════════════════════════════
+% SECTION 2: THE EMPIRICAL TRAJECTORY
+% ════════════════════════════════════════════════════════════════════════
+\section{The Empirical Trajectory}
+\label{sec:trajectory}
+
+Before presenting theory, we describe the empirical program that
+motivated it.  The trajectory from naive $k$-mer counting to structural
+ecosystem comparison spans seven months, 50+ algorithm variants, and
+three datasets of increasing difficulty.
+
+\subsection{The Population Sharing Wall}
+\label{sec:trajectory:wall}
+
+The fundamental challenge for reference-free $k$-mer methods is that
+most $k$-mers are shared between \emph{any} two same-population humans.
+At $k = 21$, the probability that a randomly chosen 21-mer is identical
+between two unrelated individuals is:
+
+\begin{equation}
+  P(\text{match}) = (1 - p_{\text{SNP}})^k
+  \label{eq:pmatch}
+\end{equation}
+
+where $p_{\text{SNP}} \approx 0.001$ is the per-base SNP rate between
+two haplotypes from the same population.  Substituting:
+
+\begin{equation}
+  P(\text{match}) = (1 - 0.001)^{21} = 0.999^{21} \approx 0.9792
+  \label{eq:pmatch_val}
+\end{equation}
+
+This means approximately $97.9\%$ of 21-mers are shared between any two
+individuals from the same population, regardless of kinship.  IBD
+segments contribute an additional ${\sim}1{-}2\%$ of sharing on top of
+this baseline.  The signal-to-noise ratio is $0.01$--$0.02$: a $1{-}2\%$
+excess on a $98\%$ background.
+
+\begin{limitation}
+\textbf{The population sharing wall.}  Any method based on counting
+shared $k$-mers must distinguish a ${\sim}1\%$ signal from a
+${\sim}98\%$ background.  This is feasible with enough data (millions of
+$k$-mers per sample) but creates enormous sensitivity to noise, coverage
+variation, and sequencing error.
+\end{limitation}
+
+\subsection{Token-Based Methods: A Complete Survey}
+\label{sec:trajectory:token}
+
+We systematically tested every token-based comparison strategy we could
+conceive.  Table~\ref{tab:token_methods} summarizes all families with
+their best results on the CEPH~1463 benchmark (our hardest dataset:
+three-generation pedigree with four parent--child relationships).
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{Token-based algorithm families tested, with best CEPH~1463
+    results.  Separation = (mean related $-$ mean unrelated) / mean
+    unrelated.  Gap = (weakest related $-$ strongest unrelated) / strongest
+    unrelated.  A positive gap means \emph{all} related pairs score above
+    \emph{all} unrelated pairs---perfect ordinal discrimination.}
+  \label{tab:token_methods}
+  \begin{tabular}{llcc}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Family}} &
+    \textcolor{white}{\textbf{Best variant}} &
+    \textcolor{white}{\textbf{Sep (\%)}} &
+    \textcolor{white}{\textbf{Gap (\%)}} \\
+    \midrule
+    Set overlap & Jaccard, containment, MinHash & $<1$ & $<-50$ \\
+    Run-length & Recombination distance & +12 & $-30$ \\
+    Distribution & Bray--Curtis, Morisita--Horn & +3 & $-25$ \\
+    Information & Entropy rate, NCD~\cite{li2004ncd} & +1.5 & $-40$ \\
+    Multi-scale & Multi-scale run weighting & +180 & +50 \\
+    Rare run-length & P90 with rarity filtering & \textbf{+583} & \textbf{+300} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\ymarginnote{The rare-run P90 achieves $583\%$ separation---two orders
+of magnitude above the baseline.}
+
+The trajectory tells a clear story.  Naive methods (Jaccard, containment)
+fail because of the population sharing wall: shared $k$-mers are
+dominated by the universal $98\%$ background.  Run-length methods
+improve by leveraging the spatial structure of sharing: IBD segments
+create long \emph{runs} of consecutive shared $k$-mers, while
+background sharing creates short, fragmented runs.  The P90 statistic
+(90th percentile of run lengths) captures this efficiently.
+
+The breakthrough came from combining run-length analysis with
+\emph{rarity filtering}: restricting attention to $k$-mers that appear
+in fewer than $50\%$ of samples.  This automatically removes the
+population baseline, and the remaining rare $k$-mers are
+overwhelmingly informative about kinship.
+
+\subsection{The Rarity Insight}
+\label{sec:trajectory:rarity}
+
+The rare-run P90 method works as follows:
+
+\begin{enumerate}
+  \item Identify $k$-mers shared between a pair of samples.
+  \item Filter to $k$-mers that appear in fewer than half the cohort
+    (``rare'' $k$-mers).
+  \item Compute the lengths of consecutive runs of shared rare $k$-mers
+    along each read.
+  \item Take the 90th percentile of run lengths as the similarity score.
+\end{enumerate}
+
+\begin{keyfinding}
+\textbf{Rarity filtering is mathematically equivalent to automatic
+variant detection.}  A $k$-mer that appears in fewer than $50\%$ of
+samples from the same population is, with high probability, tagging a
+variant (SNP, indel, or structural variant) that is not fixed in the
+population.  The rare-run P90 is therefore detecting runs of shared
+rare variants---which is precisely what IBD detectors do, but without
+alignment or variant calling.
+\end{keyfinding}
+
+This insight reveals both the power and the limitation of the
+approach.  The rare-run P90 achieves $+583\%$ separation because it is
+essentially performing reference-free IBD detection.  But it is doing
+\emph{exactly what GERMLINE does}, just without the alignment step.
+It does not introduce any fundamentally new signal.
+
+\subsection{The Convergence Problem}
+\label{sec:trajectory:convergence}
+
+As token methods improve, they converge toward classical IBD proxies:
+
+\begin{itemize}
+  \item Jaccard $\to$ MinHash $\to$ weighted MinHash $\approx$
+    \emph{Mash}~\cite{ondov2016mash}
+  \item Run-length $\to$ weighted runs $\to$ rare-filtered runs $\approx$
+    \emph{reference-free GERMLINE}
+  \item Distribution similarity $\to$ IDF-weighted cosine $\approx$
+    \emph{TF-IDF}~\cite{salton1988tfidf} \emph{for genomes}
+\end{itemize}
+
+Each improvement makes the token method more closely approximate what a
+traditional IBD detector computes.  This is \emph{not} a criticism---the
+methods work precisely because IBD is the correct biological signal.
+But it means that the token paradigm has a known ceiling: it cannot
+detect anything that IBD-based methods cannot also detect (given
+sufficient alignment and phasing quality).
+
+\begin{pullquote}
+The token paradigm converges toward classical IBD.\\
+The question is whether the ecosystem paradigm can detect something else.
+\end{pullquote}
+
+\subsection{Structural Methods: A Different Signal}
+\label{sec:trajectory:structural}
+
+In parallel with the token program, we developed algorithms based on
+the ecosystem paradigm.  These methods construct module-level
+representations of each genome and compare their organizational
+structure.  Table~\ref{tab:structural_methods} summarizes results.
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{Structural algorithm families on CEPH~1463.  All detect a
+    genuinely different signal from token methods but achieve weaker
+    separation.}
+  \label{tab:structural_methods}
+  \begin{tabular}{lccl}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Algorithm}} &
+    \textcolor{white}{\textbf{Sep (\%)}} &
+    \textcolor{white}{\textbf{Gap (\%)}} &
+    \textcolor{white}{\textbf{Status}} \\
+    \midrule
+    Module Persistence v3 & +3.36 & +0.13 & \textbf{PASSES} \\
+    Coalition Transfer v3 & +1.97 & +0.06 & \textbf{PASSES} \\
+    Module Stability v4 & +4.90 & $-$1.04 & Fails weakest \\
+    Spectral Ecology v3 & +4.93 & $-$54.67 & Fails \\
+    Spectral Ecology v4 & +0.02 & $-$4.99 & Spouse broken \\
+    Spectral Ecology v5 & $-$0.74 & $-$11.29 & Scale consist. \\
+    Spectral Ecology v6 & n/a & $-$3.21 & Persistence \\
+    Spectral Ecology v7 & n/a & $-$0.61 & Sinkhorn \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Module Persistence v3 and Coalition Transfer v3 achieve positive
+weakest gap---meaning \emph{every} parent--child pair scores above
+\emph{every} unrelated pair---but with separation orders of magnitude
+smaller than the rare-run P90 ($+3.36\%$ vs.\ $+583\%$).
+
+\begin{keyfinding}
+\textbf{Structural methods detect a real but weak signal.}  The positive
+gap of Module Persistence ($+0.13\%$) and Coalition Transfer ($+0.06\%$)
+on CEPH~1463 demonstrates that organizational structure carries kinship
+information independent of token identity.  But the signal-to-noise
+ratio is ${\sim}100\times$ worse than token methods.
+\end{keyfinding}
+
+\subsection{The Spectral Ecology Arc: v1 through v7}
+\label{sec:trajectory:arc}
+
+The Spectral Ecology family represents our most sustained attempt to
+extract structural signal through spectral-geometric methods.  Seven
+versions trace a coherent intellectual trajectory, each version's failure
+directly motivating the next.
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{The Spectral Ecology research trajectory.  Each version
+    addresses a specific limitation of its predecessor.  Gap = weakest
+    parent--child minus strongest non-parent--child, as percentage.}
+  \label{tab:spectral_arc}
+  \begin{tabular}{clcccl}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Ver}} &
+    \textcolor{white}{\textbf{Paradigm}} &
+    \textcolor{white}{\textbf{Sep}} &
+    \textcolor{white}{\textbf{Gap}} &
+    \textcolor{white}{\textbf{Sp.}} &
+    \textcolor{white}{\textbf{Lesson learned}} \\
+    \midrule
+    v1 & Sequential adjacency
+      & $-$0.7\% & $-$26.9\% & \#1
+      & Graphs too sparse (2--5 edges) \\
+    v2 & Within-sample spectra
+      & +1.6\% & $-$22.5\% & \#1
+      & Spectra have ceiling \\
+    v3 & Cross-sample transport
+      & +4.9\% & $-$54.7\% & \#1
+      & Transport indiscriminate \\
+    v4 & Single-scale coherence field
+      & +0.02\% & $-$5.0\% & \#8
+      & \textbf{Spouse confound broken} \\
+    v5 & Multi-scale fields
+      & $-$0.7\% & $-$11.3\% & \#6
+      & Scale consistency real \\
+    v6 & Persistence fields
+      & n/a & $-$3.2\% & mid
+      & Persistence narrows gap \\
+    v7 & Sinkhorn + cooperative
+      & n/a & $-$0.6\% & mid
+      & \textbf{Near parity} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\ymarginnote{Seven versions. The weakest gap improved from $-26.9\%$ to
+$-0.6\%$---a $44\times$ reduction.}
+
+The critical transition occurs at v4, when the \emph{coherence field}
+is introduced.  Versions v1--v3 attempt to compare ecosystem
+\emph{summaries} (graph spectra, heat kernel traces, bipartite
+transport scores).  These summaries capture some structural information
+but cannot distinguish spouses (who have similar global graph structure
+due to similar coverage) from parent--child pairs (who share specific
+local neighbourhood arrangements due to IBD).
+
+Version v4 introduces a continuous field $\Phi: G_A \to G_B$ that
+maps every module in sample $A$ to a position in sample $B$'s ecosystem
+space, scored by whether the mapping preserves local neighbourhood
+geometry.  This is the first method to break the spouse confound:
+spouses have globally similar ecosystems but locally dissimilar
+neighbourhoods, producing incoherent fields with high distortion.
+
+Versions v5--v7 refine the field framework: multi-scale consistency (v5),
+topological persistence (v6), and Sinkhorn-regularized optimal transport
+with cooperative stability weighting (v7).  The weakest gap contracts
+from $-26.87\%$ (v1) to $-0.61\%$ (v7), a $44\times$ improvement that
+demonstrates convergence toward the passing threshold.
+
+
+% ════════════════════════════════════════════════════════════════════════
+% SECTION 3: THEORETICAL FRAMEWORK
+% ════════════════════════════════════════════════════════════════════════
+\section{Theoretical Framework}
+\label{sec:framework}
+
+We now formalize the ecosystem comparison approach.  The framework
+proceeds in four stages: genome representation, spectral analysis,
+ecological characterization, and structural correspondence.
+
+\subsection{Genome as Labeled Interaction Graph}
+\label{sec:framework:graph}
+
+\begin{definition}
+\textbf{Genomic ecosystem graph.}  Given a set of sequencing reads from
+an individual, we construct a labeled interaction graph
+\[
+  \mathcal{G} = (V, E, w, f)
+\]
+where:
+\begin{itemize}
+  \item $V = \{m_1, \ldots, m_n\}$ is a set of \emph{modules}---clusters
+    of co-occurring $k$-mers identified by community detection on the
+    $k$-mer co-occurrence graph;
+  \item $E \subseteq V \times V$ is a set of \emph{co-occurrence edges}
+    connecting modules that appear together in sequencing reads more
+    often than expected under independence;
+  \item $w: E \to \mathbb{R}_{>0}$ assigns each edge a weight
+    proportional to the strength of co-occurrence;
+  \item $f: V \to \mathbb{R}^d$ assigns each module a $d$-dimensional
+    feature vector encoding its local structural properties (support
+    count, diversity, connectivity, spectral embedding coordinates).
+\end{itemize}
+\end{definition}
+
+The key departure from token-based representations is that $\mathcal{G}$
+encodes \emph{relationships between modules}, not just the modules
+themselves.  Two genomes can share the same set of modules (high token
+overlap) but arrange them differently (low structural correspondence),
+or vice versa.
+
+Module construction follows a three-stage pipeline:
+
+\begin{enumerate}
+  \item \textbf{Motif extraction.}  Extract all canonical $k$-mers
+    (lexicographically smaller of forward/reverse complement) from reads
+    using a Rabin--Karp rolling hash~\cite{karp1987rabin}.
+  \item \textbf{Co-occurrence graph.}  Build a weighted graph where
+    nodes are frequent $k$-mers and edges connect $k$-mers that
+    co-occur within a genomic window (typically 50--150\,bp).
+  \item \textbf{Community detection.}  Identify densely connected
+    subgraphs as modules using cohesion-based clustering (minimum support
+    and minimum internal edge density thresholds).
+\end{enumerate}
+
+In our implementation, typical parameters are $k = 15$, window size
+50--150\,bp, minimum support 3--5, and minimum cohesion 0.25--0.30.
+This produces 300--700 modules per sample in the CEPH~1463 dataset,
+with 200--1{,}400 co-occurrence edges depending on sequencing depth.
+
+\subsection{The Laplacian and Its Spectrum}
+\label{sec:framework:laplacian}
+
+The organizational structure of $\mathcal{G}$ is analyzed through its
+graph Laplacian.  Let $A \in \mathbb{R}^{n \times n}$ be the weighted
+adjacency matrix and $D = \mathrm{diag}(d_1, \ldots, d_n)$ the degree
+matrix where $d_i = \sum_j A_{ij}$.
+
+\begin{definition}
+\textbf{Normalized Laplacian.}  The symmetric normalized Laplacian is
+\begin{equation}
+  L_{\mathrm{sym}} = I - D^{-1/2} A D^{-1/2}
+  \label{eq:laplacian}
+\end{equation}
+with eigendecomposition $L_{\mathrm{sym}} = \Phi \Lambda \Phi^T$, where
+$\Lambda = \mathrm{diag}(\lambda_0, \lambda_1, \ldots, \lambda_{n-1})$
+with $0 = \lambda_0 \leq \lambda_1 \leq \cdots \leq \lambda_{n-1}
+\leq 2$.
+\end{definition}
+
+The spectrum $\{\lambda_i\}$ encodes global structural properties:
+
+\begin{itemize}
+  \item $\lambda_0 = 0$ always (constant eigenvector; connected
+    components).
+  \item $\lambda_1$ = \emph{algebraic connectivity} (Fiedler
+    value~\cite{chung1997spectral}): measures how well-connected
+    the graph is.  Small $\lambda_1$ indicates a bottleneck or
+    near-disconnection.
+  \item The multiplicity of $\lambda_0 = 0$ equals the number of
+    connected components.
+  \item The spectral gap $\lambda_1 - \lambda_0 = \lambda_1$ controls
+    the mixing time of random walks on the graph.
+\end{itemize}
+
+For ecosystem graphs with 300--700 nodes, we compute the full spectrum
+via Jacobi eigendecomposition in sub-second time.  No iterative
+approximations are needed.
+
+The \emph{random walk normalized Laplacian} $L_{\mathrm{rw}} = I -
+D^{-1}A$ is related by $L_{\mathrm{rw}} = D^{1/2} L_{\mathrm{sym}}
+D^{-1/2}$ and shares the same eigenvalues.  We use $L_{\mathrm{sym}}$
+for eigendecomposition (since it is symmetric and amenable to
+standard solvers) and interpret results through the random walk
+perspective.
+
+\subsection{Heat Kernel Signature as Ecosystem Fingerprint}
+\label{sec:framework:hks}
+
+The heat kernel on $\mathcal{G}$ describes how a unit of ``heat''
+placed at a node diffuses through the graph over time.  It is defined
+as the matrix exponential of the Laplacian:
+
+\begin{equation}
+  K_t = \exp(-t L_{\mathrm{sym}})
+  = \sum_{k=0}^{n-1} e^{-t \lambda_k} \, \phi_k \phi_k^T
+  \label{eq:heat_kernel}
+\end{equation}
+
+where $\phi_k$ is the $k$-th eigenvector.  The \emph{heat kernel
+signature} (HKS) of node $v$ at timescale $t$ is:
+
+\begin{equation}
+  \mathrm{HKS}(v, t) = K_t(v, v) = \sum_{k=0}^{n-1}
+  e^{-t \lambda_k} \, \phi_k(v)^2
+  \label{eq:hks}
+\end{equation}
+
+\begin{keyfinding}
+\textbf{The HKS is a multi-scale structural descriptor.}  At small $t$,
+HKS captures the immediate neighbourhood of $v$ (how many edges, how
+dense).  At large $t$, HKS captures $v$'s global position in the graph
+(central versus peripheral).  The full signature $\mathrm{HKS}(v,
+\cdot): \mathbb{R}_{>0} \to \mathbb{R}$ is a complete characterization
+of $v$'s structural role up to isospectral ambiguity.
+\end{keyfinding}
+
+We evaluate the HKS at 10 logarithmically spaced timescales from $t =
+0.1$ to $t = 100$, producing a 10-dimensional descriptor per module.
+The graph-level trace $\sum_v \mathrm{HKS}(v, t) = \mathrm{trace}(K_t)
+= \sum_k e^{-t\lambda_k}$ is a permutation-invariant graph fingerprint
+used in our within-sample spectral comparison (Spectral Ecology v2).
+
+\subsection{Ecological Role Assignment via Spectral Embedding}
+\label{sec:framework:roles}
+
+The first $d$ eigenvectors of $L_{\mathrm{sym}}$ define a spectral
+embedding $\psi: V \to \mathbb{R}^d$ where $\psi(v) = (\phi_1(v),
+\ldots, \phi_d(v))$.  This embedding maps structurally similar nodes to
+nearby points in $\mathbb{R}^d$, regardless of their identity (which
+$k$-mers they contain).
+
+We classify modules into ecological roles based on their spectral
+embedding coordinates and graph-theoretic properties:
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{Ecological role taxonomy for genomic modules.  Classification
+    is based on spectral embedding coordinates and local graph
+    properties.}
+  \label{tab:roles}
+  \begin{tabular}{lll}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Role}} &
+    \textcolor{white}{\textbf{Graph property}} &
+    \textcolor{white}{\textbf{Biological interpretation}} \\
+    \midrule
+    Core & High degree, central embedding & Conserved genomic structure \\
+    Satellite & Low degree, peripheral embedding & Variant-rich region \\
+    Bridge & High betweenness, mid embedding & Connects genomic domains \\
+    Scaffold & High clustering coefficient & Dense local structure \\
+    Boundary & Spectral gap position & Domain transition zone \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The role distribution of a genome---e.g., ``8 cores, 85 satellites, 356
+bridges, 12 scaffolds, 4 boundaries''---is a coarse structural
+fingerprint that is independent of which $k$-mers populate each module.
+Two genomes can have identical role distributions despite sharing no
+$k$-mers.
+
+\subsection{Coherence Fields: The Key Theoretical Object}
+\label{sec:framework:fields}
+
+The central theoretical contribution of our framework is the
+\emph{coherence field}: a continuous mapping between ecosystem spaces
+that measures structural correspondence.
+
+\begin{definition}
+\textbf{Coherence field.}  Given two genomic ecosystem graphs
+$\mathcal{G}_A$ and $\mathcal{G}_B$ with patch tensor representations
+$\{t_i^A\}_{i=1}^{n_A} \subset \mathbb{R}^d$ and $\{t_j^B\}_{j=1}^{n_B}
+\subset \mathbb{R}^d$, the coherence field $\Phi: \mathcal{G}_A \to
+\mathbb{R}^d$ maps each module in $A$ to a position in $B$'s ecosystem
+space via kernel regression:
+\begin{equation}
+  \Phi(m_i^A) = \frac{\sum_{j=1}^{n_B} K(t_i^A, t_j^B) \cdot t_j^B}
+                      {\sum_{j=1}^{n_B} K(t_i^A, t_j^B)}
+  \label{eq:coherence_field}
+\end{equation}
+where $K(x, y) = \exp\!\left(-\|x - y\|^2 / 2\sigma^2\right)$ is a
+Gaussian kernel with auto-scaled bandwidth $\sigma$ equal to the median
+pairwise distance.
+\end{definition}
+
+The coherence field is not a hard assignment (each $A$-module maps to
+one $B$-module) but a soft, continuous mapping.  Each $A$-module maps to
+a \emph{weighted blend} of $B$-module positions, with weights
+determined by structural similarity in patch-tensor space.
+
+\ymarginnote{The coherence field is the ecosystem analogue of sequence
+alignment.  Alignment maps bases to bases; the field maps ecological
+neighbourhoods to ecological neighbourhoods.}
+
+The patch tensor $t_i \in \mathbb{R}^d$ (with $d = 13$ in our
+implementation) encodes the local structural environment of each module:
+
+\begin{itemize}
+  \item Local Laplacian eigenvalues $\lambda_1, \ldots, \lambda_6$ of
+    the subgraph induced by the module's 1-hop neighbourhood: the
+    ``spectral shape'' of the local ecosystem.
+  \item Role composition (5 fractions): the proportion of core,
+    satellite, bridge, scaffold, and boundary modules in the
+    neighbourhood.
+  \item Patch density: fraction of possible edges present in the local
+    subgraph.
+  \item Relative patch size: number of nodes in the patch divided by
+    total graph size.
+\end{itemize}
+
+\subsection{Cooperative Stability: Measuring Field Quality}
+\label{sec:framework:stability}
+
+The coherence field alone does not produce a similarity score.  We need
+to measure how \emph{well-behaved} the field is---whether it represents
+a coherent structural correspondence or a random, meaningless mapping.
+
+\begin{definition}
+\textbf{Cooperative stability.}  The cooperative stability of a coherence
+field $\Phi: \mathcal{G}_A \to \mathbb{R}^d$ is the smoothness of the
+mapping with respect to the graph structure of $A$:
+\begin{equation}
+  S(\Phi) = \exp\!\left(-\mathrm{CV}\!\left(\left\{
+    \|\Phi(m_i) - \Phi(m_j)\| : (m_i, m_j) \in E_A
+  \right\}\right)\right)
+  \label{eq:coop_stability}
+\end{equation}
+where $\mathrm{CV}$ denotes the coefficient of variation (standard
+deviation divided by mean) of the set of edge-mapped distances.
+\end{definition}
+
+High cooperative stability ($S \to 1$) means that neighbouring modules
+in $A$ map to nearby positions in $B$'s ecosystem space---the field
+preserves local neighbourhood structure.  Low cooperative stability
+($S \to 0$) means the mapping is erratic: neighbours in $A$ map to
+distant, unrelated positions in $B$.
+
+\begin{keyfinding}
+\textbf{What cooperative stability actually measures.}
+Consider modules $m_i$ and $m_j$ that are neighbours in genome $A$
+(they co-occur in reads, their ecological niches overlap).  Cooperative
+stability asks: ``do the corresponding regions of genome $B$ also
+place these modules' analogues in neighbouring positions?''
+
+This is NOT asking ``do $A$ and $B$ share the same modules'' (token
+matching).  It is asking ``do $A$ and $B$ \emph{organize} their modules
+in the same way?''
+\end{keyfinding}
+
+\subsection{Why Cooperative Stability Should Detect Relatedness}
+\label{sec:framework:why}
+
+The theoretical argument for cooperative stability as a relatedness
+signal proceeds as follows:
+
+\begin{enumerate}
+  \item \textbf{IBD segments are inherited intact.}  When a child
+    inherits a haplotype block from a parent, the entire arrangement of
+    motifs, their co-occurrence patterns, and their local spectral
+    geometry within that block is inherited intact (modulo sequencing
+    errors and somatic mutations).
+
+  \item \textbf{Within IBD segments, arrangement is identical.}  The
+    coherence field restricted to modules from an IBD segment should be
+    a near-identity mapping: each $A$-module maps to the ``same'' module
+    in $B$.  This produces perfect cooperative stability within the
+    segment.
+
+  \item \textbf{Between non-IBD segments, arrangement is random.}  For
+    genomic regions that are \emph{not} IBD, $A$ and $B$ inherited
+    different haplotype blocks from different ancestors.  Even if
+    individual motifs happen to match (due to population sharing),
+    their arrangements are independent.  The coherence field over these
+    regions has no reason to be smooth.
+
+  \item \textbf{Global cooperative stability reflects IBD fraction.}
+    Parent--child pairs share $\sim 50\%$ of their genome IBD.  The
+    coherence field is smooth over the IBD half and erratic over the
+    non-IBD half.  The aggregate smoothness should be higher than for
+    unrelated pairs (where IBD fraction is near zero).
+\end{enumerate}
+
+\begin{limitation}
+\textbf{Why cooperative stability currently does not fully work.}
+The argument above assumes that we can distinguish ``smooth over IBD
+segments'' from ``smooth by coincidence.''  In practice, three barriers
+prevent this (detailed in Section~\ref{sec:coverage}):
+\begin{enumerate}
+  \item Coverage confound: similar sequencing depth creates similar
+    module counts and graph densities, producing spurious smoothness.
+  \item Symmetry: computing only $\Phi_{A \to B}$ (not also $\Phi_{B
+    \to A}$) allows directional artifacts.
+  \item Outlier sensitivity: atypical samples with unusual role
+    distributions (e.g., NA12891 with 356 bridge modules) produce
+    distinctive patch tensors that create artificially consistent
+    fields.
+\end{enumerate}
+\end{limitation}
+
+
+% ════════════════════════════════════════════════════════════════════════
+% SECTION 4: THREE PROPOSED THEORETICAL DIRECTIONS
+% ════════════════════════════════════════════════════════════════════════
+\section{Three Proposed Theoretical Directions}
+\label{sec:directions}
+
+The coherence field framework (Spectral Ecology v4--v7) has narrowed
+the gap from $-26.87\%$ to $-0.61\%$ but appears to be approaching
+diminishing returns within the kernel-regression paradigm.  We propose
+three mathematically distinct directions that represent qualitative leaps
+rather than incremental refinements.
+
+\subsection{Gromov--Wasserstein Distance Between Ecosystem Metric Spaces}
+\label{sec:directions:gw}
+
+\subsubsection{Motivation}
+
+The coherence field $\Phi$ constructs an explicit point-to-point mapping
+between modules.  This is sensitive to outliers and requires choosing a
+kernel bandwidth.  An alternative is to compare the \emph{metric spaces}
+directly, without any correspondence.
+
+\begin{definition}
+\textbf{Gromov--Wasserstein distance~\cite{memoli2011gromov}.}  Given two
+metric measure spaces $(X, d_X, \mu_X)$ and $(Y, d_Y, \mu_Y)$, the
+Gromov--Wasserstein distance is
+\begin{equation}
+  \mathrm{GW}(X, Y) = \inf_{\pi \in \Pi(\mu_X, \mu_Y)}
+  \left(
+    \iint_{X \times Y} \iint_{X \times Y}
+    |d_X(x, x') - d_Y(y, y')|^2 \,
+    d\pi(x,y) \, d\pi(x', y')
+  \right)^{1/2}
+  \label{eq:gw}
+\end{equation}
+where $\Pi(\mu_X, \mu_Y)$ is the set of couplings (transport plans)
+between $\mu_X$ and $\mu_Y$.
+\end{definition}
+
+In words: GW distance finds the optimal soft correspondence between $X$
+and $Y$ that minimizes the distortion of \emph{internal distances}.  It
+asks: ``can the internal geometry of $X$ be isometrically mapped to
+$Y$?''
+
+\subsubsection{Application to Genomic Ecosystems}
+
+For genomes $A$ and $B$:
+\begin{itemize}
+  \item $X = \{t_1^A, \ldots, t_{n_A}^A\} \subset \mathbb{R}^{13}$:
+    patch tensors of $A$'s modules.
+  \item $Y = \{t_1^B, \ldots, t_{n_B}^B\} \subset \mathbb{R}^{13}$:
+    patch tensors of $B$'s modules.
+  \item $d_X(i, i') = \|t_i^A - t_{i'}^A\|$: Euclidean distance in
+    patch-tensor space.
+  \item $\mu_X, \mu_Y$: uniform measures (all modules equally weighted)
+    or support-weighted measures.
+\end{itemize}
+
+\begin{keyfinding}
+\textbf{Why GW might work.}  GW distance compares the \emph{shape} of
+the internal distance distribution, not the positions of individual
+modules.  Related individuals share inherited arrangement
+patterns---modules that are close together in one genome should be close
+together in the other---producing similar internal distance
+distributions.  Unrelated individuals share random arrangements,
+producing different distributions.
+
+Critically, GW is \textbf{inherently size-invariant}: it does not
+require the two ecosystems to have the same number of modules.  This
+directly addresses the coverage confound, where different sequencing
+depths produce different module counts.
+\end{keyfinding}
+
+\subsubsection{Computational Feasibility}
+
+The exact GW problem is NP-hard in general, but efficient algorithms
+exist for the entropic-regularized version.  The Sinkhorn-based solver
+of Peyré et al.~\cite{peyre2019computational} computes
+$\mathrm{GW}_\varepsilon$ in $O(n^2 \log n)$ time per outer iteration,
+with $n = \max(n_A, n_B)$.  For ecosystem graphs with 400--700 modules,
+this is feasible in seconds.
+
+\subsubsection{Comparison to Coherence Fields}
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{Coherence fields vs.\ Gromov--Wasserstein distance.}
+  \label{tab:gw_comparison}
+  \begin{tabular}{lll}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Property}} &
+    \textcolor{white}{\textbf{Coherence field}} &
+    \textcolor{white}{\textbf{GW distance}} \\
+    \midrule
+    Correspondence & Soft (kernel regression) & Optimal (transport plan) \\
+    Symmetry & Asymmetric ($A \to B$) & Symmetric by construction \\
+    Size invariance & No (module count matters) & Yes (metric space) \\
+    Outlier sensitivity & High (kernel dominated) & Moderate (transport) \\
+    Metric? & No & Yes (a proper distance) \\
+    Complexity & $O(n_A \cdot n_B)$ & $O(n^2 \log n)$ per iteration \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Persistent Homology of Co-Occurrence Complexes}
+\label{sec:directions:ph}
+
+\subsubsection{Motivation}
+
+Spectral methods capture the ``shape'' of the ecosystem graph through
+eigenvalues, but they are blind to certain topological features.  Two
+graphs can have identical spectra but different topology (co-spectral
+non-isomorphic graphs).  Persistent
+homology~\cite{edelsbrunner2010computational} provides a complementary
+topological characterization that captures features invisible to the
+spectrum.
+
+\subsubsection{Filtration Construction}
+
+Starting from the weighted co-occurrence graph, we construct a
+filtration of simplicial complexes:
+
+\begin{enumerate}
+  \item \textbf{Threshold filtration.}  At threshold $\varepsilon$,
+    include all edges with weight $\geq \varepsilon$ and all cliques
+    (complete subgraphs) induced by those edges.  As $\varepsilon$
+    decreases from $\max(w)$ to $0$, more edges and higher-dimensional
+    simplices appear.
+
+  \item \textbf{Vietoris--Rips filtration.}  Embed modules in
+    patch-tensor space and build the Rips complex at increasing
+    radius.  This captures metric-space topology rather than graph
+    topology.
+\end{enumerate}
+
+\begin{definition}
+\textbf{Persistence diagram.}  For each topological feature (connected
+component, loop, void, \ldots), the persistence diagram records a
+\emph{birth time} $b$ (the threshold at which the feature first appears)
+and a \emph{death time} $d$ (the threshold at which the feature is
+destroyed by merger or filling).  The persistence $d - b$ measures the
+significance of the feature: long-lived features represent robust
+structural properties, while short-lived features are noise.
+\end{definition}
+
+\subsubsection{What Persistent Homology Captures}
+
+\begin{itemize}
+  \item $H_0$ (\textbf{connected components}): how the ecosystem
+    fragments into clusters as edge weight threshold increases.
+    Long-lived $H_0$ features correspond to robust subcommunities of
+    modules.
+  \item $H_1$ (\textbf{loops}): cycles in the co-occurrence graph that
+    persist across thresholds.  These may indicate regulatory circuits,
+    repeat structures, or circular dependencies between modules.
+  \item $H_2$ (\textbf{voids}): higher-dimensional cavities in the
+    simplicial complex.  Rare in genomic data but potentially informative
+    about mesoscale organization.
+\end{itemize}
+
+\begin{keyfinding}
+\textbf{Why persistent homology might work.}  Persistence diagrams are
+\emph{stable} under small perturbations (the Bottleneck Stability
+Theorem~\cite{edelsbrunner2010computational}): if two ecosystems differ
+by small noise, their persistence diagrams are close.  They are
+\emph{inherently size-invariant}: the number of features depends on
+topology, not on the number of nodes.  And they capture
+\emph{complementary information} to spectral methods: two ecosystems
+with identical spectra can have different persistence diagrams.
+\end{keyfinding}
+
+\subsubsection{Comparison Between Genomes}
+
+Given persistence diagrams $D_A$ and $D_B$ for two genomes, we compute
+their distance using the $p$-Wasserstein distance between diagrams:
+
+\begin{equation}
+  W_p(D_A, D_B) = \left(\inf_{\gamma: D_A \to D_B}
+  \sum_{x \in D_A} \|x - \gamma(x)\|_\infty^p \right)^{1/p}
+  \label{eq:wasserstein_diagram}
+\end{equation}
+
+where the infimum is over all bijections $\gamma$ between the (augmented)
+diagrams.  The augmentation allows unmatched points to be paired with
+their projection onto the diagonal (birth = death), representing
+ephemeral features.
+
+\subsubsection{Computational Cost}
+
+Computing the persistence diagram from a weighted graph on $n$ nodes
+requires $O(n^3)$ time for the boundary matrix reduction (or
+$O(n^\omega)$ using fast matrix multiplication).  For $n = 700$ modules,
+this is sub-second.  The Wasserstein distance between two diagrams with
+$m$ points is $O(m^3)$ via the Hungarian algorithm, or
+$O(m^{1+\varepsilon})$ using recent geometric
+algorithms~\cite{kerber2017geometry}.
+
+\subsection{Gauge-Theoretic Field Comparison}
+\label{sec:directions:gauge}
+
+\subsubsection{Motivation}
+
+The coherence field $\Phi$ is scored by its pointwise smoothness
+(cooperative stability) and its pointwise accuracy (curvature mismatch,
+distortion).  Both measures are sensitive to outliers: a few modules
+with atypical patch tensors can dominate the aggregate score.
+
+We propose reframing the field comparison in terms of \emph{gauge
+theory}: instead of comparing $\Phi$ pointwise, we compare the
+\emph{connection}---the way $\Phi$ varies along edges.
+
+\subsubsection{The Field as a Fiber Bundle Section}
+
+\begin{definition}
+\textbf{Coherence bundle.}  Let $\mathcal{G}_A = (V_A, E_A)$ be the
+base graph.  Over each node $v \in V_A$, attach a fiber
+$F_v \cong \mathbb{R}^d$ representing the possible positions in $B$'s
+ecosystem space.  The coherence field $\Phi$ is a section of this
+bundle: $\Phi(v) \in F_v$ for each $v$.
+\end{definition}
+
+The \emph{connection} on this bundle is defined by the transition
+functions along edges:
+
+\begin{equation}
+  \nabla_{ij} \Phi = \Phi(m_j) - P_{ij}(\Phi(m_i))
+  \label{eq:connection}
+\end{equation}
+
+where $P_{ij}: F_i \to F_j$ is the parallel transport operator (in
+the simplest case, the identity; in a more sophisticated version,
+the optimal rotation/scaling from the tangent space at $i$ to the
+tangent space at $j$).
+
+\subsubsection{Curvature as a Relatedness Invariant}
+
+The \emph{curvature} of the connection measures the holonomy around
+closed loops in the graph.  For a triangle $(i, j, k)$ in
+$\mathcal{G}_A$:
+
+\begin{equation}
+  R_{ijk} = \nabla_{jk} + \nabla_{ki} + \nabla_{ij}
+  = \Phi(k) - P_{jk}(\Phi(j)) + \Phi(i) - P_{ki}(\Phi(k))
+    + \Phi(j) - P_{ij}(\Phi(i))
+  \label{eq:curvature}
+\end{equation}
+
+If the parallel transport is trivial ($P = \mathrm{id}$), this simplifies
+to the ``boundary'' of $\Phi$ around the triangle.
+
+\begin{keyfinding}
+\textbf{Why curvature should detect relatedness.}  Related individuals
+have coherence fields with \emph{low curvature} (flat connections):
+the inherited organizational structure induces a \emph{consistent}
+mapping that ``commutes'' around loops.  If modules $i \to j \to k$ form
+a triangle in $A$'s ecosystem, and their images $\Phi(i), \Phi(j),
+\Phi(k)$ form a corresponding triangle in $B$'s ecosystem space, then
+the holonomy around the loop is zero.  Unrelated individuals produce
+\emph{high-curvature} fields: the mapping is locally reasonable
+(each edge maps smoothly) but globally inconsistent (going around
+a loop returns to a different point).
+\end{keyfinding}
+
+\subsubsection{Aggregate Curvature Score}
+
+The total curvature is aggregated over all triangles in $\mathcal{G}_A$:
+
+\begin{equation}
+  \mathcal{R}(\Phi) = \frac{1}{|T(\mathcal{G}_A)|}
+  \sum_{(i,j,k) \in T(\mathcal{G}_A)} \|R_{ijk}\|^2
+  \label{eq:total_curvature}
+\end{equation}
+
+where $T(\mathcal{G}_A)$ is the set of triangles in $A$'s graph.  Low
+$\mathcal{R}$ indicates a flat (consistent) field; high $\mathcal{R}$
+indicates an inconsistent field.
+
+The relatedness score is then $S_{\mathrm{gauge}} = \exp(-\alpha \cdot
+\mathcal{R}(\Phi))$ for an appropriate scaling constant $\alpha$.
+
+\begin{limitation}
+\textbf{This is the most speculative direction.}  Gauge-theoretic
+methods have been applied to image analysis (shape matching via
+connections on fiber bundles~\cite{nakahara2003geometry}) and to network
+analysis (Ollivier--Ricci curvature on graphs), but not to genomic
+ecosystem comparison.  The key open question is whether genomic
+ecosystem graphs contain enough triangles to make curvature estimation
+statistically meaningful.  In our CEPH~1463 data, typical ecosystem
+graphs have 300--700 modules and 200--1{,}400 edges, yielding
+$O(10^2)$--$O(10^3)$ triangles---likely sufficient, but empirical
+validation is needed.
+\end{limitation}
+
+\subsubsection{Comparison of the Three Directions}
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{Summary of three proposed theoretical directions.}
+  \label{tab:three_directions}
+  \begin{tabular}{lcccl}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Direction}} &
+    \textcolor{white}{\textbf{Size-inv.}} &
+    \textcolor{white}{\textbf{Outlier}} &
+    \textcolor{white}{\textbf{Metric?}} &
+    \textcolor{white}{\textbf{Theory basis}} \\
+    \midrule
+    GW distance & Yes & Moderate & Yes & Optimal transport \\
+    Persistent homology & Yes & Low & Yes & Algebraic topology \\
+    Gauge curvature & Partial & Low & No & Differential geometry \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+We believe these directions are complementary: GW distance captures
+global metric structure, persistent homology captures topological
+invariants, and gauge curvature captures local consistency.  A combined
+score incorporating all three would leverage multiple mathematical
+perspectives on the same underlying question: ``do these two ecosystems
+have the same organizational structure?''
+
+
+% ════════════════════════════════════════════════════════════════════════
+% SECTION 5: THE COVERAGE CONFOUND
+% ════════════════════════════════════════════════════════════════════════
+\section{The Coverage Confound: A Formal Analysis}
+\label{sec:coverage}
+
+The single largest obstacle to structural relatedness detection is
+confounding by sequencing coverage.  This section provides a formal
+analysis of why coverage creates spurious similarity and proposes
+four deconfounding strategies.
+
+\subsection{Why Coverage Creates Spurious Similarity}
+\label{sec:coverage:why}
+
+\begin{definition}
+\textbf{Null model.}  Consider two genomes with \emph{identical}
+$k$-mer frequency distributions but \emph{independent} sequencing.
+Let $c_A$ and $c_B$ denote their sequencing coverage (average number
+of reads covering each base).
+\end{definition}
+
+Under this null model, the ecosystem graph properties scale
+predictably with coverage:
+
+\begin{enumerate}
+  \item \textbf{Module count.}  A $k$-mer becomes a ``module motif'' when
+    it exceeds a support threshold $\tau$.  The probability that a
+    motif with population frequency $p$ exceeds threshold $\tau$ at
+    coverage $c$ is approximately $P(\mathrm{Poisson}(p \cdot c) \geq
+    \tau)$.  Thus module count $n \sim F(c)$ where $F$ is a monotone
+    increasing function of coverage.
+
+  \item \textbf{Edge count.}  Two motifs co-occur in a window when both
+    are sequenced.  If motifs have independent coverage, the expected
+    co-occurrence count scales as $O(c^2)$, and the number of edges
+    exceeding a co-occurrence threshold scales as $O(c^2)$ as well.
+
+  \item \textbf{Spectral gap.}  For Erd\H{o}s--R\'enyi random graphs
+    $G(n, p)$ with edge probability $p \propto c^2/n^2$, the spectral gap
+    $\lambda_1 \to 1$ as $np \to \infty$.  Higher coverage produces
+    denser graphs with larger spectral gaps.
+
+  \item \textbf{Heat kernel trace.}  The normalized trace
+    $\mathrm{trace}(K_t) / n = \sum_k e^{-t\lambda_k} / n$ depends on
+    the eigenvalue distribution, which itself depends on coverage through
+    graph density.
+\end{enumerate}
+
+\begin{keyfinding}
+\textbf{All standard spectral features correlate with coverage.}  Under
+the null model, samples with similar coverage produce similar module
+counts, edge counts, spectral gaps, and heat kernel traces---regardless
+of kinship.  This explains why spouses (who often have similar
+sequencing depth due to being processed together) are difficult to
+separate from parent--child pairs.
+\end{keyfinding}
+
+\subsection{Formal Scaling Relations}
+\label{sec:coverage:scaling}
+
+Let $c$ denote coverage, $n(c)$ the module count, $m(c)$ the edge
+count, and $\lambda_1(c)$ the spectral gap.  Under our null model:
+
+\begin{align}
+  n(c) &\approx N_0 \cdot \left(1 - e^{-\alpha c}\right)
+  \label{eq:module_scaling} \\
+  m(c) &\approx M_0 \cdot \left(1 - e^{-\beta c^2}\right)
+  \label{eq:edge_scaling} \\
+  \lambda_1(c) &\approx 1 - \sqrt{\frac{n(c)}{m(c)}} \cdot
+  \lambda_1^{(\mathrm{reg})}
+  \label{eq:gap_scaling}
+\end{align}
+
+where $N_0$ is the total number of possible modules, $M_0$ the total
+number of possible edges, and $\alpha, \beta$ are detection sensitivity
+parameters.  Equation~\eqref{eq:module_scaling} saturates as coverage
+increases (all possible modules are eventually detected);
+equation~\eqref{eq:edge_scaling} saturates faster due to the quadratic
+dependence on coverage.
+
+The implication is that \emph{any ecosystem feature that depends
+monotonically on module count, edge count, or graph density will be
+confounded by coverage}.  This includes most spectral features,
+most graph statistics, and most straightforward comparisons.
+
+\subsection{Proposed Deconfounding Strategies}
+\label{sec:coverage:strategies}
+
+We propose four strategies, ordered by increasing mathematical
+sophistication.
+
+\subsubsection{Strategy 1: Degree-Sequence Conditioning}
+
+Compare the observed ecosystem to a \emph{null model} with the same
+degree sequence.  Specifically, for each sample, generate $B$ random
+graphs from the Chung--Lu model with the same expected degree sequence
+as the observed ecosystem.  Compute the spectral features of each random
+graph.  The \emph{deconfounded feature} is the z-score of the observed
+feature relative to the null distribution:
+
+\begin{equation}
+  z(f) = \frac{f_{\mathrm{obs}} - \mathbb{E}[f_{\mathrm{null}}]}
+              {\mathrm{Std}[f_{\mathrm{null}}]}
+  \label{eq:zscore}
+\end{equation}
+
+This removes the effect of graph density (which is a function of
+coverage) while preserving the effect of graph \emph{structure} (which
+is a function of genomic organization).
+
+\subsubsection{Strategy 2: Spectral Ratio Features}
+
+Instead of using raw eigenvalues $\lambda_1, \lambda_2, \ldots$, use
+\emph{ratios}: $\lambda_1 / \lambda_2$, $\lambda_2 / \lambda_3$, etc.
+If coverage scales all eigenvalues by a common factor (which is
+approximately true for dense graphs), ratios are invariant:
+
+\begin{equation}
+  \frac{\lambda_i(c)}{\lambda_j(c)} \approx
+  \frac{\lambda_i}{\lambda_j} \quad \text{(coverage-independent)}
+  \label{eq:ratio}
+\end{equation}
+
+This is the spectral analogue of using allele frequency \emph{ratios}
+instead of raw counts in population genetics.
+
+\subsubsection{Strategy 3: Rank-Based Comparison}
+
+Convert all module features to ranks before computing ecosystem
+similarity.  Ranks are invariant under any monotone transformation:
+if coverage multiplies all features by a constant, their ranks are
+unchanged.  Specifically, for each sample, rank the modules by each
+feature dimension, then compare rank vectors between samples using
+Spearman correlation.
+
+\subsubsection{Strategy 4: Differential Subsampling}
+
+For each pair of samples, progressively subsample reads (at 90\%, 80\%,
+\ldots, 10\% of original coverage) and compute ecosystem similarity at
+each level.  The \emph{slope} of the similarity-vs-coverage curve is
+informative: related pairs should have a \emph{shallower slope}
+(similarity decays slowly because the shared organizational structure
+is robust) while unrelated pairs should have a \emph{steeper slope}
+(similarity decays quickly because the background sharing is fragile).
+
+\begin{equation}
+  \Delta S = \frac{\partial S}{\partial c} \bigg|_{c = c_{\mathrm{obs}}}
+  \approx \frac{S(0.9c) - S(0.5c)}{0.4c}
+  \label{eq:slope}
+\end{equation}
+
+\begin{keyfinding}
+\textbf{Differential subsampling converts a confound into a signal.}
+Instead of trying to remove the coverage effect, we \emph{measure} the
+coverage effect and use its magnitude as a feature.  Inherited structure
+is robust to coverage reduction; coincidental similarity is not.
+\end{keyfinding}
+
+
+% ════════════════════════════════════════════════════════════════════════
+% SECTION 6: CONNECTION TO CLASSICAL THEORY
+% ════════════════════════════════════════════════════════════════════════
+\section{Connection to Classical Theory}
+\label{sec:classical}
+
+\subsection{IBD as a Special Case of Ecosystem Correspondence}
+\label{sec:classical:ibd}
+
+Identity by descent (IBD) is the classical framework for genomic
+relatedness~\cite{browning2012ibd}.  Two individuals share an IBD
+segment if they inherited identical copies of a chromosomal region from
+a common ancestor.  We show that IBD segments, viewed through the
+ecosystem lens, correspond to subgraphs with \emph{perfect cooperative
+stability}.
+
+\begin{definition}
+\textbf{IBD in the ecosystem framework.}  Let $S \subseteq V_A$ be the
+set of modules in genome $A$ whose constituent $k$-mers fall within an
+IBD segment shared with genome $B$, and let $S' \subseteq V_B$ be the
+corresponding modules in $B$.  There exists a natural bijection
+$\phi_S: S \to S'$ that maps each module to its IBD-identical
+counterpart.  For this bijection:
+\begin{enumerate}
+  \item $\phi_S$ preserves all co-occurrence edges within the segment:
+    $(m_i, m_j) \in E_A|_S \iff (\phi_S(m_i), \phi_S(m_j)) \in
+    E_B|_{S'}$.
+  \item $\phi_S$ preserves node features: $f_A(m_i) = f_B(\phi_S(m_i))$
+    up to sequencing noise.
+  \item The cooperative stability of $\phi_S$ restricted to $S$ is
+    $S(\phi_S|_S) \approx 1$.
+\end{enumerate}
+\end{definition}
+
+The coherence field $\Phi$ can be viewed as an \emph{approximate,
+soft, global} version of this local bijection.  Over IBD segments,
+$\Phi$ should approximate $\phi_S$.  Over non-IBD segments, $\Phi$ has
+no template to follow and produces incoherent mappings.
+
+\begin{pullquote}
+IBD is a special case of ecosystem correspondence where the
+correspondence is exact, local, and identity-based.  The ecosystem
+framework generalizes IBD to \emph{approximate, global, structural}
+correspondence.
+\end{pullquote}
+
+\subsection{Relationship to Linkage Disequilibrium}
+\label{sec:classical:ld}
+
+Linkage disequilibrium (LD) measures the non-random association of
+alleles at different loci in a population.  Module co-occurrence in our
+framework is analogous but distinct:
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{Comparison of linkage disequilibrium and module co-occurrence.}
+  \label{tab:ld_comparison}
+  \begin{tabular}{lll}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Property}} &
+    \textcolor{white}{\textbf{LD}} &
+    \textcolor{white}{\textbf{Module co-occurrence}} \\
+    \midrule
+    Level & Population (allele frequencies) & Individual (read-level) \\
+    Reference & Allele at a locus & Module (cluster of $k$-mers) \\
+    Scale & Chromosomal (cM) & Read-level (100--1000\,bp) \\
+    Requires ref? & Yes (variant positions) & No (de novo modules) \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The ecosystem framework replaces population-level LD with
+individual-level co-occurrence.  This has both advantages (no reference
+genome, no population panel) and disadvantages (noisier, coverage-dependent).
+
+\subsection{What the Ecosystem Approach Might Detect That IBD Cannot}
+\label{sec:classical:beyond}
+
+The strongest argument for the ecosystem approach is not that it will
+beat IBD at detecting parent--child relationships (it probably cannot,
+given the $100\times$ signal gap) but that it might detect phenomena
+invisible to token-based IBD.
+
+\begin{enumerate}
+  \item \textbf{Ancestral organizational patterns.}  Organizational
+    structure is more conserved than sequence identity.  Two individuals
+    may share organizational patterns inherited from an ancestor many
+    generations back, even though all specific IBD segments have been
+    broken by recombination.
+
+  \item \textbf{Population-level structural signatures.}  Different
+    populations may have characteristic ecosystem structures (role
+    distributions, spectral signatures) that persist across individuals.
+    This could enable \emph{ancestry inference} from organizational
+    structure.
+
+  \item \textbf{Structural variants.}  Large structural variants
+    (inversions, translocations, large deletions) disrupt $k$-mer
+    identity across the breakpoint but may preserve the
+    organizational structure within the rearranged segment.
+    Liao et al.~\cite{liao2025sv} document extensive structural
+    variation in human genomes; the ecosystem approach might be
+    robust to these variants.
+
+  \item \textbf{Shared regulatory grammar.}  Co-occurrence patterns
+    among $k$-mers may reflect regulatory relationships (promoter
+    motifs near coding motifs, repeat elements near gene boundaries).
+    This ``regulatory grammar'' is not captured by haplotype identity
+    but might be captured by ecosystem structure.
+
+  \item \textbf{Metagenomics.}  In metagenomic samples (environmental
+    DNA from microbial communities), there is no single reference genome.
+    The ecosystem approach is inherently reference-free and could
+    potentially be extended to compare community structure across
+    samples.
+\end{enumerate}
+
+
+% ════════════════════════════════════════════════════════════════════════
+% SECTION 7: EXPERIMENTAL STATUS
+% ════════════════════════════════════════════════════════════════════════
+\section{Experimental Status}
+\label{sec:status}
+
+\subsection{The CEPH 1463 Benchmark}
+\label{sec:status:benchmark}
+
+Our primary benchmark is the CEPH~1463 Platinum Pedigree, a
+three-generation family sequenced by Illumina as part of the Platinum
+Genomes project~\cite{ceph1463}.
+
+\begin{pedigree}
+\begin{verbatim}
+                  GENERATION 1 (Grandparents)
+    Pat.GF (NA12889)      Pat.GM (NA12890)
+           \                 /
+            \               /
+    Mat.GF (NA12891)      Mat.GM (NA12892)
+           \                 /
+            \               /
+                  GENERATION 2 (Parents)
+            Father (NA12877) ---x--- Mother (NA12878)
+                            |
+                      GENERATION 3
+                    Child (NA12882)
+\end{verbatim}
+\end{pedigree}
+
+We use six samples (four grandparents plus father and mother) producing
+$\binom{6}{2} = 15$ pairwise comparisons.  Of these:
+
+\begin{itemize}
+  \item \textbf{4 parent--child pairs}: Pat.GF$\to$Father,
+    Pat.GM$\to$Father, Mat.GF$\to$Mother, Mat.GM$\to$Mother
+  \item \textbf{1 spouse pair}: Father$\leftrightarrow$Mother
+  \item \textbf{4 in-law pairs}: each grandparent with the opposite
+    parent
+  \item \textbf{6 cross-family pairs}: grandparents from different
+    families
+\end{itemize}
+
+The benchmark is deliberately hard: all individuals are from the same
+population (CEU/European), so the population sharing wall is
+maximal.  Spouses provide a strong negative control: they share no
+recent ancestry but were often sequenced with similar protocols and
+depth.
+
+\subsection{Current Leaderboard}
+\label{sec:status:leaderboard}
+
+Table~\ref{tab:leaderboard} presents the complete leaderboard of all
+algorithm families tested on CEPH~1463.
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{Complete algorithm leaderboard on CEPH~1463.  Separation and
+    gap as defined in Table~\ref{tab:token_methods}.  Status: PASS =
+    positive gap (all parent--child above all non-parent--child);
+    Fail = negative gap.}
+  \label{tab:leaderboard}
+  \begin{tabular}{llcccl}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Family}} &
+    \textcolor{white}{\textbf{Best variant}} &
+    \textcolor{white}{\textbf{Sep}} &
+    \textcolor{white}{\textbf{Gap}} &
+    \textcolor{white}{\textbf{Sp.}} &
+    \textcolor{white}{\textbf{Status}} \\
+    \midrule
+    \multicolumn{6}{l}{\textit{Token-based methods}} \\
+    Rare-run & P90 & +583\% & +300\% & low & \textbf{PASS} \\
+    Multi-scale run & Weighted & +180\% & +50\% & low & \textbf{PASS} \\
+    Run-length & Recombin.\ dist. & +12\% & $-$30\% & mid & Fail \\
+    Distribution & Bray--Curtis & +3\% & $-$25\% & mid & Fail \\
+    Information & NCD & +1.5\% & $-$40\% & mid & Fail \\
+    Set overlap & Jaccard & $<$1\% & $-$50\% & high & Fail \\
+    \midrule
+    \multicolumn{6}{l}{\textit{Structural methods}} \\
+    Module Persist. & v3 & +3.4\% & +0.13\% & low & \textbf{PASS} \\
+    Coalition Trans. & v3 & +2.0\% & +0.06\% & low & \textbf{PASS} \\
+    Module Stability & v4 & +4.9\% & $-$1.0\% & mid & Fail \\
+    Spectral Ecol. & v7 & n/a & $-$0.6\% & mid & Fail \\
+    Spectral Ecol. & v4 & +0.02\% & $-$5.0\% & \#8 & Fail \\
+    Spectral Ecol. & v3 & +4.9\% & $-$54.7\% & \#1 & Fail \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Infrastructure}
+\label{sec:status:infrastructure}
+
+The computational infrastructure comprises:
+
+\begin{itemize}
+  \item \textbf{12 TypeScript packages}: fastq, genome, kmer, alignment,
+    relatedness, vcf, gpu, spirv, runtime, io, compression, math.
+  \item \textbf{2 experiment packages}: symbiogenesis (module-level
+    algorithms), ecology (spectral/graph algorithms).
+  \item \textbf{18 ecology source files}: laplacian, heat-kernel,
+    spectral-invariants, role-assignment, module-embedding,
+    node-features, motif-graph, patch-tensor, coherence-field,
+    multiscale-field, persistence-field, pair-transport, compare,
+    ecosystem-signature, null-model, types, index, test suite.
+  \item \textbf{4 symbiogenesis algorithms}: module-persistence,
+    coalition-transfer, module-stability, plus barrel exports and
+    runner.
+  \item \textbf{LaTeX pipeline}: custom document class with wine palette,
+    branded typography, build system targeting \texttt{tectonic}.
+  \item \textbf{GPU pipeline} (stub): TypeScript DSL $\to$ SPIR-V IR
+    $\to$ C codegen $\to$ GPU dispatch, with CPU fallbacks for all
+    kernels.
+  \item \textbf{${\sim}15{,}000$ lines} of TypeScript, all from scratch
+    with no external bioinformatics libraries.
+\end{itemize}
+
+\subsection{Three Benchmark Datasets}
+\label{sec:status:datasets}
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{Benchmark datasets used in our empirical program.}
+  \label{tab:datasets}
+  \begin{tabular}{llcl}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Dataset}} &
+    \textcolor{white}{\textbf{Relationship}} &
+    \textcolor{white}{\textbf{Samples}} &
+    \textcolor{white}{\textbf{Difficulty}} \\
+    \midrule
+    Synthetic family & Parent-child trio & 3 & Easy \\
+    GIAB Ashkenazi~\cite{zook2019giab} & Parent-child trio & 3 & Medium \\
+    CEPH 1463~\cite{ceph1463} & 3-gen pedigree & 6 & Hard \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The synthetic family is useful for validating implementations but
+trivial to separate.  The GIAB trio provides real sequencing noise.
+CEPH~1463 is the definitive benchmark: same population, mixed
+relationships, coverage variation, and the spouse confound.
+
+
+% ════════════════════════════════════════════════════════════════════════
+% SECTION 8: MATHEMATICAL DETAILS
+% ════════════════════════════════════════════════════════════════════════
+\section{Mathematical Details}
+\label{sec:math}
+
+This section provides the formal mathematical machinery underlying
+our framework, intended for readers seeking rigorous foundations.
+
+\subsection{The Population Sharing Probability}
+\label{sec:math:sharing}
+
+We derive the expected $k$-mer sharing between two individuals from the
+same population.  Let $\pi$ denote the per-base SNP rate between two
+random haplotypes.
+
+For a $k$-mer to be \emph{identical} between two haplotypes, all $k$
+positions must match.  Assuming SNPs are independently distributed
+(a simplification that ignores LD):
+
+\begin{equation}
+  P(\text{$k$-mer match}) = (1 - \pi)^k
+  \label{eq:kmer_match}
+\end{equation}
+
+For diploid organisms, each individual has two haplotypes.  A $k$-mer
+is ``shared'' between individuals $A$ and $B$ if it appears on at
+least one haplotype of each.  Let the four haplotype pairs be
+$(h_A^1, h_B^1)$, $(h_A^1, h_B^2)$, $(h_A^2, h_B^1)$, $(h_A^2,
+h_B^2)$.  By inclusion-exclusion:
+
+\begin{align}
+  P(\text{shared}) &= 1 - P(\text{not shared}) \nonumber \\
+  &= 1 - P(\text{absent from $A$ or absent from $B$}) \nonumber \\
+  &\approx 1 - (1 - (1-\pi)^k)^2 \cdot (1 - (1-\pi)^k)^2
+  \label{eq:diploid_sharing}
+\end{align}
+
+At $\pi = 0.001$, $k = 21$:
+
+\begin{align}
+  (1 - \pi)^k &= 0.9792 \nonumber \\
+  (1 - (1-\pi)^k)^2 &= (0.0208)^2 = 0.000433 \nonumber \\
+  P(\text{shared}) &\approx 1 - 0.000433 \approx 0.9996
+  \label{eq:sharing_numeric}
+\end{align}
+
+Virtually all 21-mers are shared.  The discriminative information
+resides in the ${\sim}0.04\%$ of $k$-mers that are \emph{not}
+universally shared.
+
+\subsection{Expected Run Length Under IBD}
+\label{sec:math:runlength}
+
+Within an IBD segment, consecutive $k$-mers are shared unless a
+sequencing error disrupts one.  The expected run length of shared
+$k$-mers within an IBD segment of length $L$ bases is:
+
+\begin{equation}
+  \mathbb{E}[\text{run length} \mid \text{IBD}]
+  \approx \frac{1}{\varepsilon_k} = \frac{1}{1 - (1-\varepsilon)^k}
+  \label{eq:expected_run_ibd}
+\end{equation}
+
+where $\varepsilon$ is the per-base sequencing error rate.  At
+$\varepsilon = 0.01$ and $k = 21$:
+
+\begin{equation}
+  \varepsilon_k = 1 - (1 - 0.01)^{21} = 1 - 0.810 = 0.190
+  \label{eq:error_k}
+\end{equation}
+
+\begin{equation}
+  \mathbb{E}[\text{run}] \approx \frac{1}{0.190} \approx 5.3
+  \label{eq:expected_run_numeric}
+\end{equation}
+
+Outside IBD, the expected run length is much shorter, determined by
+the chance overlap probability at the rare-$k$-mer level.  The run-length
+distribution is the key discriminative feature exploited by the
+rare-run P90 method.
+
+\subsection{Module Count as a Function of Coverage}
+\label{sec:math:modules}
+
+Let $M$ be the total number of distinct modules in the genome (a
+property of the genome, not the sequencing).  At coverage $c$, a module
+with population frequency $p$ and $s$ constituent $k$-mers is
+\emph{detected} if at least $\tau$ of its $k$-mers are observed.  The
+number of observed $k$-mers follows $\mathrm{Binomial}(s, 1 -
+(1 - p)^c) \approx \mathrm{Binomial}(s, 1 - e^{-pc})$ for large $c$.
+
+The expected number of detected modules is:
+
+\begin{equation}
+  n(c) = \sum_{m=1}^{M} P\!\left(
+    \mathrm{Bin}(s_m, 1 - e^{-p_m c}) \geq \tau
+  \right)
+  \label{eq:module_count}
+\end{equation}
+
+For typical parameters ($p_m \approx 0.5$, $s_m \approx 10$,
+$\tau = 3$), this saturates at $c \approx 10\times$, well within
+standard whole-genome sequencing depth.
+
+\subsection{Gromov--Wasserstein: Entropic Regularization}
+\label{sec:math:gw_entropic}
+
+The exact GW problem (Equation~\ref{eq:gw}) is computationally
+intractable for large $n$.  The entropic-regularized version
+adds a penalty $\varepsilon \, H(\pi)$ where $H(\pi) = -\sum_{ij}
+\pi_{ij} \log \pi_{ij}$ is the entropy of the transport plan:
+
+\begin{equation}
+  \mathrm{GW}_\varepsilon(X, Y) = \inf_{\pi \in \Pi(\mu_X, \mu_Y)}
+  \left[
+    \sum_{i,i'} \sum_{j,j'}
+    |d_X(x_i, x_{i'}) - d_Y(y_j, y_{j'})|^2 \,
+    \pi_{ij} \pi_{i'j'}
+    - \varepsilon \, H(\pi)
+  \right]
+  \label{eq:gw_entropic}
+\end{equation}
+
+This can be solved by alternating between:
+\begin{enumerate}
+  \item Fixing $\pi$ and solving the linear optimal transport problem
+    (Sinkhorn iterations~\cite{cuturi2013sinkhorn}).
+  \item Fixing the cost matrix and updating $\pi$ via a conditional
+    gradient step.
+\end{enumerate}
+
+Each Sinkhorn step is $O(n^2)$; typically 10--50 outer iterations
+suffice for convergence.  Total cost: $O(n^2 \cdot K_{\mathrm{Sinkhorn}}
+\cdot K_{\mathrm{outer}})$ where $K_{\mathrm{Sinkhorn}} \approx 50$ and
+$K_{\mathrm{outer}} \approx 20$.  For $n = 700$: approximately
+$700^2 \times 50 \times 20 = 4.9 \times 10^8$ operations, feasible in
+seconds on a modern CPU.
+
+\subsection{Persistence Diagram Stability}
+\label{sec:math:stability}
+
+The Bottleneck Stability Theorem guarantees that small perturbations of
+the input produce small changes in the persistence diagram.
+
+\begin{definition}
+\textbf{Bottleneck Stability Theorem}
+(Edelsbrunner et al.~\cite{edelsbrunner2010computational}).  Let $f$
+and $g$ be two tame functions on a topological space $X$, and let
+$\mathrm{Dgm}(f)$ and $\mathrm{Dgm}(g)$ denote their persistence
+diagrams.  Then:
+\begin{equation}
+  d_B(\mathrm{Dgm}(f), \mathrm{Dgm}(g)) \leq \|f - g\|_\infty
+  \label{eq:bottleneck_stability}
+\end{equation}
+where $d_B$ is the bottleneck distance between diagrams.
+\end{definition}
+
+For genomic ecosystems, this means: if two samples have similar
+co-occurrence weight functions (because they share inherited
+organizational structure), their persistence diagrams will be close in
+bottleneck distance.  Sequencing noise, which adds small perturbations
+to edge weights, produces correspondingly small changes in the diagram.
+
+\subsection{Connection Curvature on Graphs}
+\label{sec:math:connection}
+
+We formalize the gauge-theoretic direction.  Let $\mathcal{G} = (V, E)$
+be a graph with a vector field $\Phi: V \to \mathbb{R}^d$ (the
+coherence field).  Define the \emph{discrete connection} $\omega$ along
+an edge $(i, j) \in E$ as:
+
+\begin{equation}
+  \omega_{ij} = \Phi(j) - \Phi(i)
+  \label{eq:discrete_connection}
+\end{equation}
+
+The \emph{discrete curvature} around a triangle $(i, j, k)$ is the
+holonomy:
+
+\begin{equation}
+  \Omega_{ijk} = \omega_{ij} + \omega_{jk} + \omega_{ki}
+  = [\Phi(j) - \Phi(i)] + [\Phi(k) - \Phi(j)] + [\Phi(i) - \Phi(k)]
+  = 0
+  \label{eq:zero_curvature}
+\end{equation}
+
+This is identically zero!  The trivial connection has zero curvature.
+To obtain a non-trivial curvature, we must introduce a non-trivial
+parallel transport.  The natural choice is:
+
+\begin{equation}
+  \omega_{ij}^{\mathrm{OT}} = \Phi(j) - T_{ij}(\Phi(i))
+  \label{eq:ot_connection}
+\end{equation}
+
+where $T_{ij}$ is the \emph{optimal transport map} from the local
+neighbourhood of $i$ (in $B$-space) to the local neighbourhood of $j$
+(in $B$-space).  The curvature then measures whether going around
+a loop in $A$'s graph and applying the local transport maps at each
+step returns to the starting point in $B$'s space.
+
+\begin{definition}
+\textbf{Holonomy curvature.}  For a triangle $(i, j, k) \in
+T(\mathcal{G}_A)$:
+\begin{equation}
+  \Omega_{ijk}^{\mathrm{OT}} = \omega_{ij}^{\mathrm{OT}}
+  + \omega_{jk}^{\mathrm{OT}} + \omega_{ki}^{\mathrm{OT}}
+  \label{eq:holonomy}
+\end{equation}
+A ``flat'' field ($\Omega \approx 0$) indicates that the local transport
+maps are globally consistent---the structural correspondence between $A$
+and $B$ is coherent.  A ``curved'' field ($\|\Omega\|$ large) indicates
+global inconsistency.
+\end{definition}
+
+This is directly analogous to the curvature of a connection on a
+principal bundle in differential geometry~\cite{nakahara2003geometry},
+discretized to the graph setting.
+
+
+% ════════════════════════════════════════════════════════════════════════
+% SECTION 9: OPEN QUESTIONS
+% ════════════════════════════════════════════════════════════════════════
+\section{Open Questions}
+\label{sec:openquestions}
+
+We close by identifying the most important open questions, both
+theoretical and empirical, that this research program must address.
+
+\subsection{Is the Structural Signal Strong Enough?}
+\label{sec:open:strength}
+
+The central empirical question: is the organizational structure of a
+genome sufficiently different between related and unrelated individuals
+to be practically useful?  Our current results suggest the signal
+exists ($+3.36\%$ separation for Module Persistence v3, positive
+weakest gap) but is $100\times$ weaker than the token-level signal
+($+583\%$ for rare-run P90).
+
+There are two possible interpretations:
+
+\begin{enumerate}
+  \item \textbf{The signal is weak because our methods are immature.}
+    Better mathematical tools (GW distance, persistence, gauge
+    curvature) might extract orders of magnitude more structural
+    signal.
+  \item \textbf{The signal is inherently weak because organizational
+    structure varies less than sequence identity.}  Related and
+    unrelated individuals may simply have more similar organizational
+    structures than they have similar sequence content.
+\end{enumerate}
+
+Distinguishing these hypotheses is critical.  If (2) is correct, the
+ecosystem approach has fundamental limits for close-relationship
+detection.  It might still be valuable for distant-relationship
+detection, ancestry inference, or metagenomics, where token-level
+signal is insufficient.
+
+\subsection{Can Spectral Methods Match Rare-Run Performance?}
+\label{sec:open:match}
+
+Specifically for parent--child detection on CEPH~1463: can any spectral
+or structural method achieve $+50\%$ separation (currently the
+second-best token result)?  Or is the spectral approach better suited
+for different tasks?
+
+We conjecture that spectral methods will never match rare-run P90 at
+parent--child detection, because rare-run is essentially doing IBD
+detection and IBD is the \emph{strongest possible signal} for close
+relationships.  The spectral approach should instead target:
+
+\begin{itemize}
+  \item Distant relationships (beyond the IBD detection horizon)
+  \item Population structure (where organizational patterns may be
+    shared across many individuals)
+  \item Metagenomic community structure (where no reference exists)
+\end{itemize}
+
+\subsection{Does the Ecosystem Representation Contain Novel Information?}
+\label{sec:open:novel}
+
+A critical theoretical question: does the ecosystem graph $\mathcal{G}$
+encode information that is \emph{not} present in the $k$-mer frequency
+spectrum $\{(k_i, c_i)\}$ (the multiset of $k$-mers and their counts)?
+
+We argue yes: the ecosystem graph encodes \emph{co-occurrence structure}
+(which $k$-mers appear together in reads) which is not captured by the
+marginal frequency spectrum.  Two genomes can have identical $k$-mer
+frequency spectra but different co-occurrence graphs if the $k$-mers
+are arranged differently along the chromosomes.
+
+However, this argument depends on read length.  With infinitely long
+reads, the co-occurrence graph would capture the entire chromosomal
+arrangement and contain maximal information.  With short reads
+(${\sim}150$\,bp for Illumina), the co-occurrence graph captures only
+\emph{local} arrangement within a $150$\,bp window.  The
+information content is therefore bounded by the ratio of read length to
+genome size.
+
+\subsection{Information-Theoretic Limits}
+\label{sec:open:info}
+
+What is the information-theoretic limit of reference-free relatedness
+detection from raw reads?  Formally: given $N$ reads of length $L$ from
+a genome of size $G$ at coverage $c = NL/G$, what is the mutual
+information between the read set and the relatedness status
+(related/unrelated)?
+
+This is an open theoretical question.  A lower bound is provided by
+the token-level information (the rare-run P90 signal).  An upper bound
+is provided by the total information in the read set about the donor
+genome.  The gap between these bounds determines how much room exists
+for structural methods to improve upon token methods.
+
+\subsection{Extension to Metagenomics}
+\label{sec:open:meta}
+
+The ecosystem framework is inherently reference-free and operates on
+communities of interacting motifs.  This makes it conceptually
+applicable to metagenomics, where the ``genome'' is a community of
+organisms and the ``modules'' are shared gene families or metabolic
+pathways.
+
+The open question is whether the spectral-geometric tools developed
+for single-organism relatedness detection transfer to community-level
+comparison.  The scale is different (millions of species vs.\ hundreds
+of modules), but the mathematical framework---interaction graphs,
+Laplacian spectra, coherence fields---is the same.
+
+
+% ════════════════════════════════════════════════════════════════════════
+% SECTION 10: CONCLUSION
+% ════════════════════════════════════════════════════════════════════════
+\section{Conclusion}
+\label{sec:conclusion}
+
+\subsection{An Honest Assessment}
+
+The token paradigm works.  On the hardest benchmark we have (CEPH~1463,
+same-population, three-generation pedigree), the rare-run P90 achieves
+$+583\%$ separation with every parent--child pair scoring decisively
+above every non-parent--child pair.  This is a practical, deployable
+result that validates reference-free relatedness detection as an
+engineering possibility.
+
+The ecosystem paradigm is promising but unproven.  Module Persistence v3
+and Coalition Transfer v3 achieve positive weakest gap on CEPH~1463,
+demonstrating that organizational structure carries kinship information.
+But the signal is $100\times$ weaker than the token signal, and the
+spectral ecology program---despite seven iterations of increasing
+mathematical sophistication---has not yet achieved positive weakest gap.
+
+\subsection{What the Trajectory Demonstrates}
+
+The spectral ecology arc (v1 through v7) demonstrates several important
+facts:
+
+\begin{enumerate}
+  \item \textbf{Structural signal exists.}  The improvements from
+    $-26.87\%$ to $-0.61\%$ are not random; each version targets and
+    addresses a specific failure mode.
+
+  \item \textbf{The spouse confound is breakable.}  v4's breakthrough
+    (spouses from rank~1 to rank~8) proves that structural methods can
+    distinguish ``similar because co-sequenced'' from ``similar because
+    related''---something naive token methods cannot do.
+
+  \item \textbf{Diminishing returns within the kernel-regression
+    paradigm.}  The $44\times$ improvement from v1 to v7 is large,
+    but the rate of improvement is decelerating.  Qualitative
+    mathematical leaps (GW, persistence, gauge theory) are needed.
+
+  \item \textbf{The computational objects are converging.}  The
+    progression tokens $\to$ summaries $\to$ matchings $\to$ fields
+    $\to$ multi-scale fields $\to$ persistence fields suggests a
+    natural hierarchy.  Each level adds more structural information
+    to the comparison.
+\end{enumerate}
+
+\subsection{The Path Forward}
+
+We believe the strongest case for the ecosystem approach will come
+not from beating rare-run P90 at parent--child detection, but from
+one of three scenarios:
+
+\begin{enumerate}
+  \item \textbf{Detecting distant relationships} beyond the IBD
+    detection horizon, where organizational patterns persist after
+    specific sequence identity has been lost to recombination.
+
+  \item \textbf{Detecting population structure} from organizational
+    signatures, enabling reference-free ancestry inference without
+    variant calling.
+
+  \item \textbf{Detecting structural relationships in metagenomics},
+    where no reference genome exists and the ecosystem framework
+    is the only available paradigm.
+\end{enumerate}
+
+The three proposed theoretical directions---Gromov--Wasserstein distance,
+persistent homology, and gauge-theoretic field comparison---represent
+our best mathematical candidates for qualitative advances.  Each
+addresses a specific limitation of the current coherence field framework
+(size dependence, spectral blindness, and outlier sensitivity,
+respectively), and each draws on mature mathematical theory with strong
+stability guarantees.
+
+\begin{pullquote}
+The question is not whether genomes can be compared structurally---they
+can.  The question is whether structural comparison reveals anything
+that sequence comparison does not.
+\end{pullquote}
+
+This paper is a request for feedback.  The theoretical framework, the
+empirical trajectory, and the proposed directions are presented in full
+so that computational biologists, applied mathematicians, and genomicists
+can evaluate the approach, identify flaws, and suggest alternatives.
+We welcome criticism.  The strongest possible outcome for this program
+is a rigorous answer---whether positive or negative---to the question of
+whether inherited ecosystem structure is a practically useful signal
+for genomic relatedness detection.
+
+
+% ════════════════════════════════════════════════════════════════════════
+% APPENDIX: ALGORITHMIC CATALOGUE
+% ════════════════════════════════════════════════════════════════════════
+\appendix
+\section{Algorithmic Catalogue}
+\label{sec:catalogue}
+
+This appendix provides brief descriptions of all major algorithm
+variants tested during the empirical program, organized by family.
+
+\subsection{Set Overlap Family}
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{Set overlap algorithms.}
+  \label{tab:cat_set}
+  \begin{tabular}{llc}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Algorithm}} &
+    \textcolor{white}{\textbf{Description}} &
+    \textcolor{white}{\textbf{CEPH Sep}} \\
+    \midrule
+    $k$-mer Jaccard & $|A \cap B| / |A \cup B|$ & $<1\%$ \\
+    Containment & $|A \cap B| / \min(|A|, |B|)$ & $<1\%$ \\
+    MinHash & Approximate Jaccard via sketching & $<1\%$ \\
+    Weighted Jaccard & IDF-weighted set intersection & $\sim$2\% \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+All set overlap methods fail because the population sharing wall
+($\sim$98\% baseline) dominates the IBD signal ($\sim$1\% excess).
+
+\subsection{Run-Length Family}
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{Run-length algorithms.}
+  \label{tab:cat_run}
+  \begin{tabular}{llc}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Algorithm}} &
+    \textcolor{white}{\textbf{Description}} &
+    \textcolor{white}{\textbf{CEPH Sep}} \\
+    \midrule
+    Recombination distance & Mean run length of shared $k$-mers & +12\% \\
+    P90 run length & 90th percentile of run lengths & +25\% \\
+    Weighted runs & Length-weighted run score & +30\% \\
+    Multi-scale runs & Runs at multiple $k$ values & +180\% \\
+    Rare P90 & P90 on rare ($<$50\% freq) $k$-mers & \textbf{+583\%} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The rare-run P90 breakthrough demonstrates that rarity filtering
+removes the population baseline, leaving only the IBD-informative
+$k$-mers.
+
+\subsection{Distribution Family}
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{Distribution comparison algorithms.}
+  \label{tab:cat_dist}
+  \begin{tabular}{llc}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Algorithm}} &
+    \textcolor{white}{\textbf{Description}} &
+    \textcolor{white}{\textbf{CEPH Sep}} \\
+    \midrule
+    Cosine similarity & Frequency vector cosine & +2\% \\
+    Jensen--Shannon & $\sqrt{\mathrm{JSD}(p_A, p_B)}$ & +1.5\% \\
+    Bray--Curtis~\cite{bray1957} & $1 - \sum|a_i - b_i| / \sum(a_i + b_i)$ & +3\% \\
+    Morisita--Horn~\cite{morisita1959} & Overlap index for count data & +2.5\% \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Distribution methods provide moderate signal but cannot distinguish
+local sharing (IBD) from global sharing (population baseline).
+
+\subsection{Information-Theoretic Family}
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{Information-theoretic algorithms.}
+  \label{tab:cat_info}
+  \begin{tabular}{llc}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Algorithm}} &
+    \textcolor{white}{\textbf{Description}} &
+    \textcolor{white}{\textbf{CEPH Sep}} \\
+    \midrule
+    Entropy rate & Conditional entropy of shared $k$-mers & +1\% \\
+    NCD~\cite{li2004ncd} & Normalized compression distance & +1.5\% \\
+    Mutual information & MI between $k$-mer count vectors & +0.5\% \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Information-theoretic methods perform poorly, likely because the
+compressibility of genomic sequences is dominated by repeat content
+rather than by kinship-related sharing patterns.
+
+\subsection{Structural: Module Persistence Family}
+
+Module Persistence constructs a shared module vocabulary across all
+samples and compares samples by which modules they contain.
+
+\begin{itemize}
+  \item \textbf{v1}: Per-sample modules with Jaccard comparison.
+    Fails because module IDs are sample-specific.
+  \item \textbf{v2}: Shared vocabulary with edge Jaccard.  Edge Jaccard
+    has range 86--89\% for all pairs (not discriminative).
+  \item \textbf{v3}: Rarity-weighted informative module overlap plus
+    support cosine.  \textbf{$+3.36\%$ separation, $+0.13\%$ gap.  PASSES.}
+\end{itemize}
+
+\subsection{Structural: Coalition Transfer Family}
+
+Coalition Transfer measures sharing of \emph{module coalitions}:
+specific combinations of modules that co-occur in individual reads.
+
+\begin{itemize}
+  \item \textbf{v1}: Raw coalition Jaccard.  Moderate signal but
+    confounded by coverage.
+  \item \textbf{v2}: IDF-weighted coalition cosine.  Boosted in-laws
+    unexpectedly.
+  \item \textbf{v3}: Three-way blend (rarity + exclusive + unweighted
+    cosine).  \textbf{$+1.97\%$ separation, $+0.06\%$ gap.  PASSES.}
+\end{itemize}
+
+\subsection{Structural: Module Stability Family}
+
+Module Stability uses bootstrap resampling to identify which motifs
+are \emph{stably organized} into modules across subsamples.
+
+\begin{itemize}
+  \item \textbf{v1--v3}: Binary stability filtering with various
+    thresholds.  Moderate signal.
+  \item \textbf{v4}: Continuous stability-weighted rarity Jaccard.
+    \textbf{$+4.90\%$ average separation} but \textbf{$-1.04\%$ weakest
+    gap} (fails weakest parent--child pair).
+\end{itemize}
+
+\subsection{Structural: Spectral Ecology Family}
+
+The Spectral Ecology family is detailed in
+Section~\ref{sec:trajectory:arc} and represents our deepest
+investigation of spectral-geometric methods.  Seven versions span the
+progression from disconnected sequential-adjacency graphs (v1) through
+Sinkhorn-regularized optimal transport with cooperative stability
+weighting (v7).
+
+
+% ════════════════════════════════════════════════════════════════════════
+% APPENDIX: CEPH 1463 PAIRWISE ANALYSIS
+% ════════════════════════════════════════════════════════════════════════
+\section{CEPH 1463 Detailed Pairwise Analysis}
+\label{sec:pairwise}
+
+For completeness, we present the complete pairwise score tables for
+the three best-performing algorithms on CEPH~1463.
+
+\subsection{Module Persistence v3}
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{Module Persistence v3: complete pairwise scores on CEPH~1463.
+    $\blacktriangleright$ = parent--child.}
+  \label{tab:mp_scores}
+  \begin{tabular}{clccc}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Rk}} &
+    \textcolor{white}{\textbf{Pair}} &
+    \textcolor{white}{\textbf{Score}} &
+    \textcolor{white}{\textbf{Rarity}} &
+    \textcolor{white}{\textbf{Cosine}} \\
+    \midrule
+    1 & $\blacktriangleright$ Pat.GM $\to$ Father & 0.3248 & 34.1\% & 0.320 \\
+    2 & $\blacktriangleright$ Mat.GF $\to$ Mother & 0.3221 & 33.8\% & 0.318 \\
+    3 & $\blacktriangleright$ Pat.GF $\to$ Father & 0.3195 & 33.4\% & 0.316 \\
+    4 & $\blacktriangleright$ Mat.GM $\to$ Mother & 0.3148 & 32.9\% & 0.312 \\
+    \midrule
+    5 & Father $\leftrightarrow$ Mother & 0.3144 & 32.8\% & 0.311 \\
+    6 & Mat.GF $\leftrightarrow$ Father & 0.3132 & 32.7\% & 0.310 \\
+    7 & Pat.GF $\leftrightarrow$ Mother & 0.3118 & 32.5\% & 0.309 \\
+    8 & Pat.GM $\leftrightarrow$ Mat.GM & 0.3105 & 32.3\% & 0.308 \\
+    9 & Pat.GF $\leftrightarrow$ Mat.GF & 0.3098 & 32.2\% & 0.307 \\
+    10 & Mat.GM $\leftrightarrow$ Father & 0.3091 & 32.1\% & 0.307 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\ymarginnote{All four parent--child pairs rank in the top four.  Gap:
+$+0.13\%$.  Razor-thin but correct.}
+
+The margins are razor-thin: the gap between rank~4 (weakest
+parent--child: 0.3148) and rank~5 (strongest non-parent--child: 0.3144)
+is only $+0.13\%$.  This demonstrates that the structural signal is
+real but fragile.
+
+\subsection{Coalition Transfer v3}
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{Coalition Transfer v3: complete pairwise scores on
+    CEPH~1463.}
+  \label{tab:ct_scores}
+  \begin{tabular}{clccc}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Rk}} &
+    \textcolor{white}{\textbf{Pair}} &
+    \textcolor{white}{\textbf{Score}} &
+    \textcolor{white}{\textbf{Excl.}} &
+    \textcolor{white}{\textbf{FreqCos}} \\
+    \midrule
+    1 & $\blacktriangleright$ Pat.GF $\to$ Father & 0.1524 & 1.82\% & 0.394 \\
+    2 & $\blacktriangleright$ Pat.GM $\to$ Father & 0.1498 & 1.75\% & 0.391 \\
+    3 & $\blacktriangleright$ Mat.GF $\to$ Mother & 0.1472 & 1.68\% & 0.387 \\
+    4 & $\blacktriangleright$ Mat.GM $\to$ Mother & 0.1463 & 1.65\% & 0.385 \\
+    \midrule
+    5 & Father $\leftrightarrow$ Mother & 0.1462 & 1.64\% & 0.384 \\
+    6 & Mat.GF $\leftrightarrow$ Father & 0.1455 & 1.62\% & 0.383 \\
+    7 & Pat.GF $\leftrightarrow$ Mother & 0.1448 & 1.59\% & 0.381 \\
+    8 & Pat.GM $\leftrightarrow$ Mat.GM & 0.1441 & 1.57\% & 0.380 \\
+    9 & Pat.GF $\leftrightarrow$ Mat.GF & 0.1438 & 1.56\% & 0.379 \\
+    10 & Mat.GM $\leftrightarrow$ Father & 0.1432 & 1.54\% & 0.378 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Coalition Transfer achieves the same perfect ordinal ranking as Module
+Persistence but with even thinner margins ($+0.06\%$ gap).
+
+
+% ════════════════════════════════════════════════════════════════════════
+% APPENDIX: NOTATION AND SYMBOLS
+% ════════════════════════════════════════════════════════════════════════
+\section{Notation and Symbols}
+\label{sec:notation}
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{Notation used throughout this paper.}
+  \label{tab:notation}
+  \begin{tabular}{ll}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Symbol}} &
+    \textcolor{white}{\textbf{Meaning}} \\
+    \midrule
+    $\mathcal{G} = (V, E, w, f)$ & Genomic ecosystem graph \\
+    $L_{\mathrm{sym}}$ & Symmetric normalized Laplacian \\
+    $\lambda_k$ & $k$-th eigenvalue of $L_{\mathrm{sym}}$ \\
+    $\phi_k$ & $k$-th eigenvector of $L_{\mathrm{sym}}$ \\
+    $K_t = \exp(-tL)$ & Heat kernel at timescale $t$ \\
+    $\mathrm{HKS}(v, t)$ & Heat kernel signature of node $v$ \\
+    $\Phi: \mathcal{G}_A \to \mathbb{R}^d$ & Coherence field \\
+    $S(\Phi)$ & Cooperative stability of field $\Phi$ \\
+    $\mathrm{GW}(X, Y)$ & Gromov--Wasserstein distance \\
+    $\pi \in \Pi(\mu, \nu)$ & Optimal transport plan \\
+    $H(\pi)$ & Entropy of transport plan \\
+    $D_A, D_B$ & Persistence diagrams \\
+    $W_p(D_A, D_B)$ & $p$-Wasserstein distance between diagrams \\
+    $\omega_{ij}$ & Discrete connection along edge $(i,j)$ \\
+    $\Omega_{ijk}$ & Holonomy curvature around triangle \\
+    $\mathcal{R}(\Phi)$ & Aggregate curvature of field \\
+    $c$ & Sequencing coverage \\
+    $k$ & $k$-mer length \\
+    $\pi$ & Per-base SNP rate \\
+    $n$ & Number of modules \\
+    $m$ & Number of edges \\
+    $d$ & Patch tensor dimension (13) \\
+    $\sigma$ & Kernel bandwidth \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+
+% ════════════════════════════════════════════════════════════════════════
+% BIBLIOGRAPHY
+% ════════════════════════════════════════════════════════════════════════
+\bibliographystyle{plain}
+\bibliography{../references}
+
+\end{document}
