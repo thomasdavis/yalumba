@@ -53,6 +53,10 @@ export type { CoherenceFieldResult } from "./coherence-field.js";
 export { extractMultiScalePatches, solveMultiScaleField } from "./multiscale-field.js";
 export type { MultiScalePatches, MultiScaleFieldResult } from "./multiscale-field.js";
 
-// v6: Symbiogenetic persistence fields
+// v6/v7: Symbiogenetic persistence fields
 export { solvePersistenceField } from "./persistence-field.js";
 export type { PersistenceFieldResult } from "./persistence-field.js";
+
+// v8: Holonomy-based curvature invariants
+export { findTriangles, computeHolonomy, compareCurvatureDistributions } from "./holonomy.js";
+export type { HolonomyResult } from "./holonomy.js";
