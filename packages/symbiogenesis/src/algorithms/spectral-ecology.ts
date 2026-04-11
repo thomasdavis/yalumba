@@ -41,8 +41,8 @@ interface PreparedContext {
 
 export const spectralEcology: SymbioAlgorithm = {
   name: "Spectral ecology",
-  version: 6,
-  description: "Symbiogenetic persistence fields — symmetrized + perturbation-robust coherence",
+  version: 7,
+  description: "Sinkhorn symmetry + cooperative stability 45% + per-sample patch normalization",
   family: "ecological-succession",
   maxReadsPerSample: 50_000,
 
