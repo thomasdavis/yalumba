@@ -42,3 +42,13 @@ export { buildNodeFeatures, NODE_FEATURE_DIM } from "./node-features.js";
 export type { NodeFeatureSet } from "./node-features.js";
 export { pairTransport } from "./pair-transport.js";
 export type { PairTransportScore } from "./pair-transport.js";
+
+// v4: Symbiogenetic coherence fields
+export { extractPatches, PATCH_DIM } from "./patch-tensor.js";
+export type { EcologicalPatch, SamplePatches } from "./patch-tensor.js";
+export { solveCoherenceField } from "./coherence-field.js";
+export type { CoherenceFieldResult } from "./coherence-field.js";
+
+// v5: Multi-scale symbiogenetic field curvature
+export { extractMultiScalePatches, solveMultiScaleField } from "./multiscale-field.js";
+export type { MultiScalePatches, MultiScaleFieldResult } from "./multiscale-field.js";

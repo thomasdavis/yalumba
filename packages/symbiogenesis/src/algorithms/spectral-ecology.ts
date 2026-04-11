@@ -1,17 +1,17 @@
 /**
- * Algorithm Family 4: Spectral Ecology v3 — Pair-Coupled Ecosystem Transport
+ * Algorithm Family 4: Spectral Ecology v5 — Multi-Scale Symbiogenetic Field Curvature
  *
- * v1: sequential adjacency → graph collapse → failure
- * v2: co-occurrence + within-sample spectral → +1.55% sep, spouse confound
- * v3: cross-sample bipartite transport → the missing ingredient
+ * v1: graph collapse
+ * v2: within-sample ceiling (+1.55%)
+ * v3: cross-sample transport (+4.93%, spouse #1)
+ * v4: coherence fields (+0.02%, spouse #8, gap -4.99%)
+ * v5: multi-scale field consistency
  *
- * Key insight: within-sample spectral summaries hit a ceiling because
- * they measure ecosystem SHAPE, which correlates with coverage.
- * v3 builds a structure that ONLY EXISTS when two samples are
- * considered together: a bipartite soft correspondence between
- * their module ecosystems.
- *
- * Score = transport affinity + topology preservation + unmatched penalty
+ * Key insight from v4: inheritance signal lies not in absolute
+ * deformation magnitude, but in CONSISTENCY of deformation across
+ * scales. Relatives share constraints that produce stable transformation
+ * patterns across 1-hop, 2-hop, and 3-hop neighbourhoods.
+ * Unrelated pairs produce scale-dependent incoherence.
  */
 
 import type { SymbioAlgorithm, SampleReads, ComparisonScore } from "../types.js";
@@ -19,14 +19,12 @@ import {
   buildInteractionGraph,
   normalizedLaplacian,
   eigenDecomposition,
-  computeHeatKernel,
   assignRoles,
-  buildNodeFeatures,
-  pairTransport,
+  extractMultiScalePatches,
+  solveMultiScaleField,
 } from "@yalumba/ecology";
-import type { NodeFeatureSet } from "@yalumba/ecology";
-import { buildModules } from "@yalumba/modules";
-import type { Module, ModuleExtractionOptions } from "@yalumba/modules";
+import type { MultiScalePatches } from "@yalumba/ecology";
+import type { ModuleExtractionOptions } from "@yalumba/modules";
 
 const EXTRACT_OPTS: ModuleExtractionOptions = {
   motifK: 15,
@@ -35,65 +33,50 @@ const EXTRACT_OPTS: ModuleExtractionOptions = {
   minCohesion: 0.25,
 };
 
-interface PreparedSample {
-  modules: readonly Module[];
-  nodeFeatures: NodeFeatureSet;
-}
-
 interface PreparedContext {
-  samples: Map<string, PreparedSample>;
+  samples: Map<string, MultiScalePatches>;
 }
 
 export const spectralEcology: SymbioAlgorithm = {
   name: "Spectral ecology",
-  version: 3,
-  description: "Pair-coupled ecosystem transport — cross-sample bipartite module correspondence",
+  version: 5,
+  description: "Multi-scale symbiogenetic field curvature — scale-consistent deformation over ecological patches",
   family: "ecological-succession",
   maxReadsPerSample: 50_000,
 
   prepare(samples): PreparedContext {
     const t0 = performance.now();
-    console.log(`    [spectral-ecology-v3] Building per-sample ecosystems...`);
+    console.log(`    [spectral-ecology-v5] Building multi-scale patches...`);
 
-    const prepared = new Map<string, PreparedSample>();
+    const prepared = new Map<string, MultiScalePatches>();
 
     for (const sample of samples) {
       const st = performance.now();
-      console.log(`      ${sample.id}: modules + graph + spectral...`);
+      console.log(`      ${sample.id}: graph + spectral + 3-scale patches...`);
 
-      // Extract modules
-      const modules = buildModules(sample.reads, EXTRACT_OPTS);
-
-      // Build co-occurrence graph
       const graph = buildInteractionGraph(sample.reads, EXTRACT_OPTS);
-
-      // Spectral decomposition
       const laplacian = normalizedLaplacian(graph.adjacency);
       const eigen = eigenDecomposition(laplacian);
-      const heat = computeHeatKernel(eigen);
       const roles = assignRoles(graph, eigen);
 
-      // Build enriched node features for cross-sample matching
-      const nodeFeatures = buildNodeFeatures(
-        sample.id, modules, graph, eigen, heat, roles,
-      );
+      const patches = extractMultiScalePatches(sample.id, graph, roles);
 
       const elapsed = ((performance.now() - st) / 1000).toFixed(1);
-      console.log(`        ${graph.n} modules, ${nodeFeatures.n} nodes, ${elapsed}s`);
+      console.log(`        ${graph.n} modules, 3 scales, ${elapsed}s`);
 
-      prepared.set(sample.id, { modules, nodeFeatures });
+      prepared.set(sample.id, patches);
     }
 
-    console.log(`    [spectral-ecology-v3] Total prep: ${((performance.now() - t0) / 1000).toFixed(1)}s`);
+    console.log(`    [spectral-ecology-v5] Total prep: ${((performance.now() - t0) / 1000).toFixed(1)}s`);
     return { samples: prepared };
   },
 
   compare(a: SampleReads, b: SampleReads, context: unknown): ComparisonScore {
     const ctx = context as PreparedContext;
-    const prepA = ctx.samples.get(a.id)!;
-    const prepB = ctx.samples.get(b.id)!;
+    const pA = ctx.samples.get(a.id)!;
+    const pB = ctx.samples.get(b.id)!;
 
-    const result = pairTransport(prepA.nodeFeatures, prepB.nodeFeatures);
+    const result = solveMultiScaleField(pA, pB);
 
     return {
       score: result.score,
