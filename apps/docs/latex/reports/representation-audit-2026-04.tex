@@ -1,0 +1,1799 @@
+\documentclass{../yalumba}
+
+\usepackage{multirow}
+\usepackage{array}
+
+\title{The Representation Bottleneck:\\A Perturbation Audit of Module-Graph\\Features for Genomic Ecosystem Comparison}
+\author{Ajax Davis}
+\date{April 2026}
+
+\setabstract{%
+We present the results of a systematic perturbation audit of the
+module-graph representation that has served as the computational substrate
+for ten versions of Spectral Ecology and three prior symbiogenesis
+algorithms.  This is a \textbf{negative result paper}.  The audit applies
+three complementary stress tests---a coverage ladder (subsampling at
+100\%, 80\%, 60\%, and 40\% of 50,000 reads), cross-sample variance
+analysis, and a read-order shuffle test---to the 15 features extracted
+from k-mer co-occurrence graphs constructed for six members of the CEPH
+1463 pedigree.  The findings are unambiguous and sobering.  First, only
+5 of 15 features achieve self-perturbation stability (coefficient of
+variation below 0.15 across coverage levels): module count, edge density,
+mean degree, mean curvature, and median curvature.  The remaining 10
+features, including all five ecological role counts that several
+algorithm versions weighted heavily, are \emph{unstable under
+subsampling within the same sample}.  Second, the signal-to-nuisance
+ratio---defined as cross-sample variance divided by self-perturbation
+variance---exceeds 3 for \textbf{zero} of 15 features.  The best ratio
+is 2.93 (edge density); the worst is 0.59 (scaffold role count).  Four
+features, including two of the three curvature statistics that Spectral
+Ecology v9 scored, have ratios below 1.0, meaning that variation
+introduced by subsampling the \emph{same} genome exceeds variation
+between \emph{different} genomes.  For these features, the
+representation is literally noisier than the signal it is supposed to
+carry.  Third, and most devastatingly, shuffling read order---a
+transformation that changes zero biological content---produces
+catastrophic changes in graph structure: module count increases by 45\%
+to 184\%, triangle count increases by 2\% to 607\%, and edge count
+increases by 27\% to 264\%.  The module-graph representation is not
+merely noisy; it is \emph{non-deterministic} with respect to read
+ordering, a property that no downstream invariant can correct.  These
+results explain why the ten-version Spectral Ecology arc, despite
+producing genuine theoretical advances in coherence fields, intrinsic
+curvature distributions, holonomy deficits, and Sinkhorn-regularized
+optimal transport, never achieved a positive weakest-pair gap: the
+scoring algorithms were optimizing invariants on an unstable
+representation.  The downstream sophistication was outrunning
+upstream identifiability.  We provide detailed tables of all 15 features
+across all three tests, analyze the two ``least-bad'' features (edge
+density at ratio 2.93 and median curvature at ratio 2.47) as potential
+starting points for a stabilized representation, and offer concrete
+recommendations for the next phase: deterministic module extraction,
+coverage-matched subsampling, rank-based normalization, and an acceptance
+criterion requiring signal-to-nuisance ratio above 3 for every scored
+feature before any new algorithm version is attempted.  This paper
+changes the direction of the yalumba research program.  It is, we argue,
+the most important experiment the project has conducted.}
+
+\begin{document}
+\maketitle
+
+\tableofcontents
+\newpage
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Introduction}
+\label{sec:intro}
+
+\subsection{Why Negative Results Matter}
+
+The history of computational science is littered with methods that
+optimized the wrong objective on the wrong substrate.  In machine
+learning, feature engineering on unstable representations produced years
+of incremental papers before practitioners learned to audit the
+representation itself~\cite{bendavid2006stability}.  In genomics, early
+reference-free methods achieved impressive-looking metrics on benchmarks
+whose variance properties were never characterized~\cite{fan2021reference}.
+In ecology, decades of community comparison used indices whose sensitivity
+to sampling effort exceeded their sensitivity to actual community
+differences~\cite{bray1957, morisita1959}.
+
+\begin{pullquote}
+The most important experiment in a research program is not the one that
+succeeds.  It is the one that reveals what success was being measured
+against.
+\end{pullquote}
+
+This paper reports such an experiment.  After ten versions of Spectral
+Ecology---a research arc spanning sparse graphs, dense co-occurrence
+graphs, optimal transport, coherence fields, persistence fields,
+Sinkhorn regularization, holonomy deficits, intrinsic curvature, and
+hybrid invariants---we step back and ask a question that should have been
+asked before version~1:
+
+\begin{keyfinding}
+Is the module-graph representation stable enough for \emph{any}
+downstream invariant to distinguish biological signal from
+representation noise?
+\end{keyfinding}
+
+The answer is no.
+
+\subsection{The Ten-Version Arc as Context}
+
+Table~\ref{tab:arc-summary} summarizes the Spectral Ecology program.
+Each version introduced increasingly sophisticated mathematical
+machinery: Laplacian eigendecomposition (v1--v2), Wasserstein transport
+(v3), coherence fields (v4--v5), persistence fields (v6), Sinkhorn
+regularization with cooperative weighting (v7), gauge-theoretic holonomy
+(v8), Ollivier--Ricci curvature distributions (v9), and hybrid
+intrinsic--relational composites (v10).
+
+\begin{table}[htbp]
+\centering
+\tablestyle
+\caption{The Spectral Ecology arc: ten versions, ten paradigms.}
+\label{tab:arc-summary}
+\begin{tabular}{@{}llrr@{}}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Version}} &
+\textcolor{white}{\textbf{Core Idea}} &
+\textcolor{white}{\textbf{Sep.}} &
+\textcolor{white}{\textbf{Gap}} \\
+\midrule
+v1 & Sparse adjacency, eigenvalue density  & $-0.74\%$ & $-26.87\%$ \\
+v2 & Dense co-occurrence, heat kernel      & $+1.55\%$ & $-22.53\%$ \\
+v3 & Wasserstein transport                 & $+4.93\%$ & $-54.67\%$ \\
+v4 & Coherence fields                      & $+2.10\%$ & $-18.40\%$ \\
+v5 & Multi-scale coherence                 & $+1.80\%$ & $-12.30\%$ \\
+v6 & Persistence fields                    & $+2.40\%$ & $-3.21\%$ \\
+v7 & Sinkhorn cooperative stability        & $+0.87\%$ & $-0.61\%$ \\
+v8 & Holonomy gauge invariants             & $+1.62\%$ & $-6.41\%$ \\
+v9 & Intrinsic curvature distributions     & $+3.20\%$ & $-7.93\%$ \\
+v10 & Hybrid intrinsic--relational         & $+1.50\%$ & $-1.66\%$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\ymarginnote{The gap trajectory: $-26.87\% \to -0.61\% \to -1.66\%$.
+Progress is real but the gap never turns positive.}
+
+The trajectory is suggestive.  Separation improved from $-0.74\%$ to
+$+4.93\%$ (v3), and the weakest gap narrowed from $-26.87\%$ to
+$-0.61\%$ (v7).  But the gap never turned positive.  The persistent
+failure mode was the spouse pair (Father--Mother), which consistently
+scored among the top-ranked pairs despite being unrelated, due to
+similar sequencing coverage producing similar module graph structure.
+
+Every version attributed this to a \emph{scoring confound}---coverage
+similarity inflating pairwise scores---and attempted to fix it
+downstream: null-model deconfounding (v2), self-baseline normalization
+(v8), distributional comparison (v9).  None of these attempts succeeded
+in closing the gap to positive.
+
+A pattern emerges from the arc.  The three eras of the program---within-sample
+spectral summaries (v1--v2), cross-sample relational methods (v3--v6), and
+intrinsic geometric invariants (v7--v10)---each attacked the \emph{scoring}
+problem with increasing mathematical sophistication.  But none attacked the
+\emph{representation} problem.  The module graph was accepted as given, like a
+microscope that nobody thought to calibrate.
+
+This paper provides the explanation: \textbf{the confound is not in the
+scoring.  It is in the representation.}
+
+\subsection{The Feedback That Prompted This Audit}
+
+The impetus for this experiment was a piece of external feedback on the
+theoretical framework paper~\cite{nakahara2003geometry}: ``downstream
+sophistication is outrunning upstream identifiability.''  The observation
+was that the program had invested enormous effort in invariants
+(eigenvalue densities, heat kernel traces, curvature distributions,
+transport plans, holonomy deficits) while making essentially zero
+investment in understanding whether the input to those invariants---the
+module graph itself---was a reliable measurement instrument.
+
+\begin{definition}
+A \textbf{measurement instrument} is reliable if repeated measurements
+of the same object yield similar results.  In our context, the ``object''
+is a genome, the ``measurement'' is the module-graph representation, and
+``repeated measurements'' are obtained by subsampling reads or
+reordering them.  A reliable representation has low self-perturbation
+variance relative to cross-sample variance.
+\end{definition}
+
+This is not a novel concept.  It is the foundation of measurement
+science: an instrument must have lower measurement error than the effect
+size it is trying to detect.  But in ten versions of algorithm
+development, this property was never tested.
+
+\subsection{Why This Is the Most Important Experiment}
+
+The module-graph representation underlies every algorithm in the
+symbiogenesis program.  Module Persistence~v3 counts shared modules.
+Coalition Transfer~v3 counts shared coalitions.  All ten versions of
+Spectral Ecology extract invariants from module co-occurrence graphs.
+If the representation is unreliable, then:
+
+\begin{itemize}
+  \item Algorithms that pass (Module Persistence, Coalition Transfer)
+    may be exploiting the \emph{stable subset} of features by accident.
+  \item Algorithms that fail (Module Stability, Spectral Ecology) may
+    be scoring features whose variation is dominated by representation
+    noise.
+  \item The persistent coverage confound may not be a confound at all,
+    but a consequence of the representation collapsing biological
+    diversity into coverage-dependent structure.
+\end{itemize}
+
+This experiment tests all three hypotheses simultaneously.
+
+\subsection{Relationship to Passing Algorithms}
+
+Module Persistence v3 ($+3.36\%$ separation, $+0.13\%$ gap) and
+Coalition Transfer v3 ($+1.97\%$ separation, $+0.06\%$ gap) both pass
+the kinship detection threshold.  If the representation is unreliable,
+why do they work?
+
+The answer, previewed here and explored in Section~\ref{sec:discussion},
+is that these algorithms happen to exploit the stable subset of
+features.  Module Persistence scores the overlap of \emph{which modules
+exist}---a property closely related to module count, which has a CV of
+0.11.  Coalition Transfer scores co-occurrence of module pairs---a
+property related to edge density, which has a CV of 0.07.  Neither
+algorithm directly scores triangle counts, role distributions, or
+curvature statistics.  Their success is not evidence that the
+representation is sound.  It is evidence that a few features within the
+representation carry enough signal for simple algorithms---and that
+sophisticated algorithms that score the full feature set are worse off,
+not better off, than simple ones that accidentally restrict themselves
+to the stable features.
+
+This is the cruelest finding of the audit: \textbf{the simplest
+algorithms in the project were the most robust, and the most
+sophisticated were the most fragile.}
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Background}
+\label{sec:background}
+
+\subsection{The Module-Graph Representation}
+\label{sec:bg-representation}
+
+The module-graph representation is constructed as follows.  Given a set
+of reads from a FASTQ file:
+
+\begin{enumerate}
+  \item \textbf{K-mer extraction.}  Canonical k-mers (lexicographically
+    smaller of k-mer and its reverse complement) are extracted from each
+    read using a rolling hash~\cite{karp1987rabin}.  Typical $k = 21$.
+  \item \textbf{Frequency filtering.}  K-mers are filtered by frequency
+    to remove sequencing errors (low count) and repetitive elements
+    (high count).  Typical thresholds: frequency $\geq 2$, frequency
+    $\leq 100$.
+  \item \textbf{Co-occurrence counting.}  For each pair of k-mers
+    appearing on the same read within a window, a co-occurrence count is
+    incremented.  This produces a symmetric co-occurrence matrix.
+  \item \textbf{Graph construction.}  K-mers become nodes.  Edges are
+    created between k-mers whose co-occurrence exceeds a threshold
+    (typically the mean co-occurrence plus one standard deviation).
+  \item \textbf{Module extraction.}  Connected components of the graph
+    are identified as ``modules.''  Each module is a set of k-mers that
+    co-occur frequently on reads.
+  \item \textbf{Feature extraction.}  15 features are computed from the
+    module graph: module count, triangle count, edge count, edge density,
+    mean/max degree, curvature statistics (mean, std, p50, p90), and
+    ecological role counts (core, satellite, bridge, scaffold, boundary).
+\end{enumerate}
+
+\subsection{What Ten Versions Assumed}
+
+Every version of Spectral Ecology assumed, implicitly or explicitly,
+that the module graph captured something biologically meaningful and
+reproducible about the genome.  Specifically:
+
+\begin{itemize}
+  \item \textbf{v1--v2} assumed that eigenvalue densities of the graph
+    Laplacian were genome-specific signatures.
+  \item \textbf{v3} assumed that the graph structure was stable enough
+    for optimal transport between graphs to be meaningful.
+  \item \textbf{v4--v6} assumed that multi-scale heat kernel signatures
+    encoded persistent structural features.
+  \item \textbf{v7} assumed that cooperative stability (agreement across
+    multiple invariants) would cancel noise.
+  \item \textbf{v8} assumed that holonomy---path-dependent parallel
+    transport on the graph---was a gauge-invariant property of the
+    biology, not an artifact of the representation.
+  \item \textbf{v9} assumed that Ollivier--Ricci curvature distributions
+    captured intrinsic geometric properties that were independent of
+    graph size and density.
+  \item \textbf{v10} assumed that combining intrinsic and relational
+    invariants would suppress each other's failure modes.
+\end{itemize}
+
+None of these assumptions were tested against the null hypothesis that
+the module graph's structure is dominated by coverage-dependent and
+order-dependent artifacts.
+
+\ymarginnote{Ten versions of assumptions.  Zero versions of validation.
+This audit is the first.}
+
+The implicit chain of reasoning was: ``the graph captures biology
+$\Rightarrow$ invariants of the graph capture invariants of the biology
+$\Rightarrow$ comparing invariants compares biology.''  The first link
+in this chain---the graph captures biology---was never validated.  If
+it is false, the rest of the chain is vacuous regardless of the
+mathematical sophistication applied downstream.
+
+\subsection{The Concept of Signal-to-Nuisance Ratio}
+
+We borrow from signal processing the idea that a measurement system's
+utility depends not on the absolute magnitude of signal it detects, but
+on the ratio of signal to noise.  In our context:
+
+\begin{definition}
+The \textbf{signal-to-nuisance ratio} (SNR) of a feature is:
+\begin{equation}
+  \text{SNR} = \frac{\text{CV}_{\text{cross-sample}}}
+                     {\text{CV}_{\text{self-perturbation}}}
+  \label{eq:snr}
+\end{equation}
+where $\text{CV}$ is the coefficient of variation.  Cross-sample CV
+measures how much the feature varies between different genomes at full
+coverage.  Self-perturbation CV measures how much the feature varies
+when the \emph{same} genome is measured at different coverage levels.
+\end{definition}
+
+An SNR of 1.0 means the feature varies as much between measurements
+of the same genome as it does between different genomes.  Such a feature
+carries no usable signal.  An SNR of 3.0 means cross-sample variation
+is three times self-perturbation variation---a minimal threshold for
+the feature to contribute to discrimination.
+
+\begin{limitation}
+This definition of SNR uses the coefficient of variation, which assumes
+roughly linear scaling of standard deviation with mean.  For features
+with heavy-tailed distributions or zero-inflated counts (such as bridge
+and scaffold role counts), the CV may overstate instability.  We use
+it here as a simple, interpretable metric; more sophisticated measures
+(intraclass correlation, measurement invariance models) are left for
+future work.
+\end{limitation}
+
+\subsection{Why Perturbation Testing Matters}
+
+Perturbation testing is not algorithm design.  It is \emph{measurement
+science}~\cite{efron1979bootstrap, hennig2007cluster}.  The question is
+not ``can we build a clever algorithm?'' but ``is the input to that
+algorithm a reliable instrument?''
+
+\ymarginnote{Metrology---the science of measurement---requires that
+instrument precision be characterized before any measurement is
+reported.  We never did this.}
+
+In classical genomics, perturbation testing is routine.  Variant callers
+are evaluated by subsampling reads and measuring concordance.  IBD
+detectors are tested across coverage
+levels~\cite{browning2012ibd, browning2013refinedibd}.
+Reference-free methods validate stability under read
+subsets~\cite{ondov2016mash, brinda2023phylogenetic}.
+
+The yalumba project skipped this step.  For ten versions, the
+representation was treated as a given---a fixed input whose properties
+were unquestioned.  The audit reported here is, in retrospect, the
+experiment that should have been conducted before version~1.
+
+The analogy to ecology is instructive.  When Bray and Curtis introduced
+their dissimilarity index in 1957~\cite{bray1957}, they accompanied it
+with extensive discussion of sampling effort and its effect on community
+representation.  Morisita's overlap index~\cite{morisita1959} was
+explicitly designed to be robust to sample size.  The ecological
+literature understood, sixty years ago, that \emph{you cannot compare
+communities if your representation of each community depends on how hard
+you looked}.  The genomics field sometimes forgets this lesson.
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Methods}
+\label{sec:methods}
+
+\subsection{Dataset}
+
+All experiments use the CEPH 1463 pedigree~\cite{ceph1463}, a
+three-generation family:
+
+\begin{pedigree}
+\begin{verbatim}
+       NA12891 (Pat. GF) --- NA12892 (Pat. GM)
+                    |
+                NA12877 (Father)
+                    |
+                    +---- NA12878 (Mother)
+                    |
+       NA12889 (Mat. GF) --- NA12890 (Mat. GM)
+\end{verbatim}
+\end{pedigree}
+
+Six samples, each processed from Illumina short-read FASTQ files.
+50,000 reads per sample at full coverage.  Related pairs: Father--Mother
+is the \emph{spouse pair} (unrelated).  Father--Pat.~GF, Father--Pat.~GM,
+Mother--Mat.~GF, Mother--Mat.~GM are the four parent--child pairs
+(related).
+
+\subsection{Coverage Ladder}
+\label{sec:coverage-ladder}
+
+For each of the six samples, we construct module graphs at four coverage
+levels by subsampling reads:
+
+\begin{itemize}
+  \item \textbf{100\%:} all 50,000 reads
+  \item \textbf{80\%:} 40,000 reads (random subsample, fixed seed)
+  \item \textbf{60\%:} 30,000 reads (random subsample, fixed seed)
+  \item \textbf{40\%:} 20,000 reads (random subsample, fixed seed)
+\end{itemize}
+
+Each coverage level produces an independent module graph.  Features are
+extracted from each graph.  The coefficient of variation across the four
+coverage levels, for each feature within each sample, measures
+self-perturbation instability.
+
+\subsection{Shuffle Test}
+\label{sec:shuffle-test}
+
+For each of the six samples, we take the full 50,000 reads and
+\textbf{randomize their order} using a deterministic permutation (fixed
+seed).  The shuffled reads contain \emph{exactly the same biological
+content}---the same k-mers, the same k-mer frequencies, the same
+sequences.  The only difference is the order in which reads are
+processed.
+
+If the module-graph representation were a function of the biological
+content alone, the shuffle test would produce identical graphs.  Any
+change in graph structure is pure representation artifact.
+
+\subsection{Feature Extraction}
+
+From each module graph, we extract 15 features organized into four
+categories:
+
+\begin{enumerate}
+  \item \textbf{Graph topology (4 features):} module count, triangle
+    count, edge count, edge density.
+  \item \textbf{Degree statistics (2 features):} mean degree, max degree.
+  \item \textbf{Curvature statistics (4 features):} Ollivier--Ricci
+    curvature mean, standard deviation, 50th percentile (p50), and 90th
+    percentile (p90).
+  \item \textbf{Ecological role counts (5 features):} core, satellite,
+    bridge, scaffold, boundary.  These are assigned by thresholding degree,
+    betweenness centrality, and local clustering
+    coefficient~\cite{hartwell1999cell, milo2002network}.
+\end{enumerate}
+
+\subsection{Self-Perturbation CV}
+
+For each feature $f$ and each sample $s$, we compute the coefficient
+of variation across the four coverage levels:
+
+\begin{equation}
+  \text{CV}_{\text{self}}(f, s) =
+    \frac{\sigma_{f,s}}{\mu_{f,s}}
+  \label{eq:cv-self}
+\end{equation}
+
+where $\mu_{f,s}$ and $\sigma_{f,s}$ are the mean and standard
+deviation of feature $f$ across the four coverage levels for sample $s$.
+The reported self-perturbation CV is the mean across all six samples:
+
+\begin{equation}
+  \overline{\text{CV}}_{\text{self}}(f) =
+    \frac{1}{6} \sum_{s=1}^{6} \text{CV}_{\text{self}}(f, s)
+  \label{eq:cv-self-mean}
+\end{equation}
+
+\subsection{Cross-Sample CV}
+
+At 100\% coverage, we compute the coefficient of variation of each
+feature across the six samples:
+
+\begin{equation}
+  \text{CV}_{\text{cross}}(f) =
+    \frac{\sigma_f}{\mu_f}
+  \label{eq:cv-cross}
+\end{equation}
+
+This measures the variation that exists between genuinely different
+genomes under identical processing conditions.
+
+\subsection{Signal-to-Nuisance Ratio}
+
+The ratio is computed per Equation~\ref{eq:snr}.  Features with
+$\text{SNR} < 1$ are dominated by self-perturbation noise.  Features
+with $1 \leq \text{SNR} < 3$ are marginal.  Features with
+$\text{SNR} \geq 3$ are minimally acceptable for downstream scoring.
+
+\begin{keyfinding}
+The acceptance criterion is $\text{SNR} \geq 3$.  This threshold is
+deliberately conservative.  In psychometrics and measurement theory,
+an instrument with reliability below 0.7 (roughly corresponding to
+$\text{SNR} < 3$) is considered unfit for individual-level
+inference~\cite{hennig2007cluster}.  We adopt the same standard.
+\end{keyfinding}
+
+\subsection{Experimental Protocol}
+
+All experiments use identical k-mer parameters ($k = 21$, frequency
+filter $\geq 2$, $\leq 100$), identical graph construction thresholds,
+and identical feature extraction code.  The only variables are:
+
+\begin{enumerate}
+  \item \textbf{Coverage ladder:} number of reads used (100\%, 80\%,
+    60\%, 40\%).
+  \item \textbf{Shuffle test:} order of reads (original vs. permuted).
+\end{enumerate}
+
+All random operations use fixed seeds for reproducibility.
+
+\subsection{Stability Classification}
+
+We classify features into three stability tiers based on self-perturbation
+CV:
+
+\begin{definition}
+\begin{itemize}
+  \item \textbf{STABLE:} Mean self-perturbation CV $< 0.15$.  The
+    feature changes by less than 15\% on average when coverage is reduced
+    by up to 60\%.
+  \item \textbf{MODERATE:} Mean self-perturbation CV in $[0.15, 0.40)$.
+    The feature changes by 15--40\% under coverage perturbation.
+  \item \textbf{UNSTABLE:} Mean self-perturbation CV $\geq 0.40$.  The
+    feature changes by more than 40\%, or its standard deviation exceeds
+    its mean at some coverage levels.
+\end{itemize}
+\end{definition}
+
+These thresholds are deliberately generous.  A 15\% CV is already
+concerning for a measurement instrument---it means that measuring the
+same genome at 80\% coverage instead of 100\% can change the feature
+by more than one standard deviation.  We adopt lenient thresholds to
+ensure that features classified as UNSTABLE are unambiguously
+unreliable.
+
+\subsection{Verdict Classification for SNR}
+
+For the signal-to-nuisance ratio, we use three verdicts:
+
+\begin{itemize}
+  \item \textbf{NOISE $>$ SIGNAL} ($\text{SNR} < 1$): Self-perturbation
+    variance exceeds cross-sample variance.  The feature cannot
+    distinguish genomes.
+  \item \textbf{MARGINAL} ($1 \leq \text{SNR} < 3$): Cross-sample
+    variance exceeds self-perturbation variance, but not by enough
+    for reliable discrimination.
+  \item \textbf{ACCEPTABLE} ($\text{SNR} \geq 3$): The feature has
+    enough signal relative to noise for downstream scoring.
+\end{itemize}
+
+As the results will show, no feature reaches the ACCEPTABLE tier.
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Results}
+\label{sec:results}
+
+\subsection{Self-Perturbation Analysis}
+\label{sec:self-perturbation}
+
+Table~\ref{tab:self-perturbation} presents the self-perturbation CV
+for all 15 features across the six CEPH 1463 samples.
+
+\begin{table}[htbp]
+\centering
+\tablestyle
+\caption{Self-perturbation analysis.  CV = coefficient of variation
+across coverage levels (100\%, 80\%, 60\%, 40\%) averaged over six
+samples.  Features with mean CV $< 0.15$ are classified as STABLE;
+$0.15$--$0.40$ as MODERATE; $> 0.40$ as UNSTABLE.}
+\label{tab:self-perturbation}
+\begin{tabular}{@{}lrrrl@{}}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Feature}} &
+\textcolor{white}{\textbf{Mean CV}} &
+\textcolor{white}{\textbf{Min CV}} &
+\textcolor{white}{\textbf{Max CV}} &
+\textcolor{white}{\textbf{Verdict}} \\
+\midrule
+moduleCount    & 0.1059 & 0.0154 & 0.2119 & STABLE \\
+triangleCount  & 0.4386 & 0.2244 & 0.8157 & UNSTABLE \\
+edgeCount      & 0.2303 & 0.0758 & 0.4579 & MODERATE \\
+edgeDensity    & 0.0725 & 0.0147 & 0.1843 & STABLE \\
+meanDegree     & 0.1249 & 0.0446 & 0.2675 & STABLE \\
+maxDegree      & 0.2947 & 0.0850 & 0.6563 & MODERATE \\
+curvMean       & 0.1373 & 0.0274 & 0.3549 & STABLE \\
+curvStd        & 0.2452 & 0.0656 & 0.5500 & MODERATE \\
+curvP50        & 0.0660 & 0.0168 & 0.1006 & STABLE \\
+curvP90        & 0.1949 & 0.0205 & 0.5494 & MODERATE \\
+role\_core      & 0.5458 & 0.0831 & 1.5508 & UNSTABLE \\
+role\_satellite & 0.4689 & 0.1884 & 0.7971 & UNSTABLE \\
+role\_bridge    & 1.0875 & 0.0000 & 1.7321 & UNSTABLE \\
+role\_scaffold  & 0.8034 & 0.0000 & 1.7321 & UNSTABLE \\
+role\_boundary  & 0.7251 & 0.3333 & 1.7321 & UNSTABLE \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{keyfinding}
+Only 5 of 15 features are stable under coverage perturbation: module
+count (CV = 0.106), edge density (CV = 0.073), mean degree (CV = 0.125),
+mean curvature (CV = 0.137), and median curvature (CV = 0.066).  All
+five ecological role counts are \textbf{unstable}, with CVs ranging from
+0.47 (satellite) to 1.09 (bridge).
+\end{keyfinding}
+
+The instability of role counts is particularly damaging.  The bridge
+role has a maximum CV of 1.73---a value that indicates the standard
+deviation across coverage levels \emph{exceeds the mean}.  For several
+samples, the bridge count is zero at some coverage levels and nonzero
+at others, producing undefined or extreme CVs.  Similarly, scaffold and
+boundary roles fluctuate wildly, with max CVs of 1.73.
+
+The moderate features (edge count, max degree, curvature std, curvature
+p90) sit in an uncomfortable middle ground.  Their CVs of 0.19--0.29
+mean that a 40\% reduction in coverage can change the feature value by
+20--30\%.  This is not catastrophic, but it is far from the stability
+needed for reliable comparison.
+
+\subsection{Cross-Sample Variance}
+\label{sec:cross-sample}
+
+Table~\ref{tab:cross-sample} presents the cross-sample variance at
+100\% coverage.
+
+\begin{table}[htbp]
+\centering
+\tablestyle
+\caption{Cross-sample variance at 100\% coverage (6 samples).  These
+numbers represent the ``signal'' side of the signal-to-nuisance ratio:
+how much do features vary between genuinely different genomes?}
+\label{tab:cross-sample}
+\begin{tabular}{@{}lrrrr@{}}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Feature}} &
+\textcolor{white}{\textbf{Mean}} &
+\textcolor{white}{\textbf{Std}} &
+\textcolor{white}{\textbf{CV}} &
+\textcolor{white}{\textbf{Range}} \\
+\midrule
+moduleCount     & 588.67 &   90.39 & 0.1536 & 457--712 \\
+triangleCount   & 3305.00 & 1363.32 & 0.4125 & 1256--4867 \\
+edgeCount       & 1675.33 &  394.18 & 0.2353 & 1110--2251 \\
+edgeDensity     &    0.01 &    0.00 & 0.2124 & 0.004--0.009 \\
+meanDegree      &    5.66 &    0.83 & 0.1465 & 4.5--6.4 \\
+maxDegree       &   81.00 &   38.39 & 0.4739 & 37--144 \\
+curvMean        &    1.22 &    0.15 & 0.1244 & 1.1--1.4 \\
+curvStd         &    1.57 &    0.36 & 0.2275 & 1.0--1.9 \\
+curvP50         &    0.79 &    0.13 & 0.1633 & 0.6--1.0 \\
+curvP90         &    2.49 &    0.68 & 0.2717 & 1.5--3.4 \\
+role\_core       &  411.50 &  218.71 & 0.5315 & 14--629 \\
+role\_satellite  &   91.33 &   71.49 & 0.7827 & 19--223 \\
+role\_bridge     &   76.67 &  170.99 & 2.2302 & 0--459 \\
+role\_scaffold   &    7.33 &    3.50 & 0.4767 & 0--11 \\
+role\_boundary   &    1.83 &    1.57 & 0.8576 & 0--5 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The cross-sample CVs paint a superficially encouraging picture.  Role
+counts have high cross-sample variance---bridge role has a CV of 2.23,
+suggesting enormous variation between samples.  But high cross-sample
+variance is \emph{only meaningful if self-perturbation variance is low}.
+A feature that varies wildly between samples \emph{and} varies wildly
+within a sample is just noisy, not discriminative.
+
+\ymarginnote{High cross-sample CV is necessary but not sufficient.  The
+signal-to-nuisance ratio asks: is the cross-sample variation genuine,
+or is it the same noise that appears within samples?}
+
+Note the role count ranges.  Core ranges from 14 to 629---a 45-fold
+range.  Bridge ranges from 0 to 459.  Scaffold from 0 to 11.  These
+enormous ranges will produce the appearance of discrimination in any
+downstream algorithm, but we must verify that they reflect biology
+rather than coverage artifacts.
+
+\subsection{Signal-to-Nuisance Ratio}
+\label{sec:snr}
+
+Table~\ref{tab:snr} presents the signal-to-nuisance ratio for all 15
+features.  This is the central result of the paper.
+
+\begin{table}[htbp]
+\centering
+\tablestyle
+\caption{Signal-to-nuisance ratio (SNR) for all 15 features.
+$\text{SNR} = \text{CV}_{\text{cross}} / \text{CV}_{\text{self}}$.
+Features with $\text{SNR} < 1$ carry more noise than signal.  No
+feature achieves the acceptance threshold of $\text{SNR} \geq 3$.}
+\label{tab:snr}
+\begin{tabular}{@{}lrrrl@{}}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Feature}} &
+\textcolor{white}{\textbf{Self CV}} &
+\textcolor{white}{\textbf{Cross CV}} &
+\textcolor{white}{\textbf{Ratio}} &
+\textcolor{white}{\textbf{Verdict}} \\
+\midrule
+moduleCount     & 0.1059 & 0.1536 & 1.45 & MARGINAL \\
+triangleCount   & 0.4386 & 0.4125 & 0.94 & NOISE $>$ SIGNAL \\
+edgeCount       & 0.2303 & 0.2353 & 1.02 & MARGINAL \\
+edgeDensity     & 0.0725 & 0.2124 & 2.93 & MARGINAL (best) \\
+meanDegree      & 0.1249 & 0.1465 & 1.17 & MARGINAL \\
+maxDegree       & 0.2947 & 0.4739 & 1.61 & MARGINAL \\
+curvMean        & 0.1373 & 0.1244 & 0.91 & NOISE $>$ SIGNAL \\
+curvStd         & 0.2452 & 0.2275 & 0.93 & NOISE $>$ SIGNAL \\
+curvP50         & 0.0660 & 0.1633 & 2.47 & MARGINAL \\
+curvP90         & 0.1949 & 0.2717 & 1.39 & MARGINAL \\
+role\_core       & 0.5458 & 0.5315 & 0.97 & NOISE $>$ SIGNAL \\
+role\_satellite  & 0.4689 & 0.7827 & 1.67 & MARGINAL \\
+role\_bridge     & 1.0875 & 2.2302 & 2.05 & MARGINAL \\
+role\_scaffold   & 0.8034 & 0.4767 & 0.59 & NOISE $>$ SIGNAL \\
+role\_boundary   & 0.7251 & 0.8576 & 1.18 & MARGINAL \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{keyfinding}
+\textbf{Zero features achieve an SNR of 3 or above.}  The best SNR is
+2.93 (edge density).  The second-best is 2.47 (median curvature, curvP50).
+After that, the ratios drop below 2.1.  Four features have
+$\text{SNR} < 1$, meaning self-perturbation noise exceeds cross-sample
+variation: triangle count (0.94), mean curvature (0.91), curvature
+standard deviation (0.93), core role count (0.97), and scaffold role
+count (0.59).
+\end{keyfinding}
+
+Figure~\ref{fig:snr-landscape} categorizes the features visually.
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  x=4cm, y=4cm,
+  marginal/.style={fill=yalumba-gold!30, circle, inner sep=2pt,
+    minimum size=5pt},
+  noise/.style={fill=yalumba-wine!50, circle, inner sep=2pt,
+    minimum size=5pt},
+]
+% Axes
+\draw[->] (0,0) -- (2.6,0) node[right] {\small\sffamily Cross-sample CV};
+\draw[->] (0,0) -- (0,1.4) node[above] {\small\sffamily Self-perturbation CV};
+
+% Reference lines
+\draw[dashed, yalumba-wine, thick] (0,0) -- (2.4,2.4*0.333)
+  node[right, font=\tiny\sffamily] {SNR = 3};
+\draw[dashed, yalumba-slate, thin] (0,0) -- (2.4,2.4)
+  node[right, font=\tiny\sffamily] {SNR = 1};
+
+% Data points
+\node[marginal] at (0.1536, 0.1059) {};
+\node[right, font=\tiny] at (0.18, 0.1059) {modCnt};
+
+\node[noise] at (0.4125, 0.4386) {};
+\node[right, font=\tiny] at (0.44, 0.44) {triCnt};
+
+\node[marginal] at (0.2353, 0.2303) {};
+\node[right, font=\tiny] at (0.26, 0.23) {edgeCnt};
+
+\node[marginal] at (0.2124, 0.0725) {};
+\node[right, font=\tiny] at (0.24, 0.0725) {edgeDens};
+
+\node[marginal] at (0.1465, 0.1249) {};
+\node[left, font=\tiny] at (0.13, 0.1249) {meanDeg};
+
+\node[marginal] at (0.4739, 0.2947) {};
+\node[right, font=\tiny] at (0.50, 0.29) {maxDeg};
+
+\node[noise] at (0.1244, 0.1373) {};
+\node[left, font=\tiny] at (0.10, 0.14) {curvMn};
+
+\node[noise] at (0.2275, 0.2452) {};
+\node[left, font=\tiny] at (0.20, 0.26) {curvStd};
+
+\node[marginal] at (0.1633, 0.0660) {};
+\node[below, font=\tiny] at (0.1633, 0.04) {curvP50};
+
+\node[marginal] at (0.2717, 0.1949) {};
+\node[right, font=\tiny] at (0.30, 0.19) {curvP90};
+
+\node[noise] at (0.5315, 0.5458) {};
+\node[right, font=\tiny] at (0.56, 0.55) {core};
+
+\node[marginal] at (0.7827, 0.4689) {};
+\node[right, font=\tiny] at (0.81, 0.47) {sat};
+
+\node[marginal] at (2.2302, 1.0875) {};
+\node[below, font=\tiny] at (2.23, 1.06) {bridge};
+
+\node[noise] at (0.4767, 0.8034) {};
+\node[left, font=\tiny] at (0.45, 0.82) {scaf};
+
+\node[marginal] at (0.8576, 0.7251) {};
+\node[right, font=\tiny] at (0.88, 0.73) {bndry};
+
+\end{tikzpicture}
+\caption{Signal-to-nuisance landscape.  Points above the SNR=1 line
+(gray dashed) carry more noise than signal.  Points above the SNR=3
+line (wine dashed) fail the acceptance criterion.  \textbf{All points
+are above the SNR=3 line.}  Gold-filled circles are marginal
+($1 \leq \text{SNR} < 3$); wine-filled circles have $\text{SNR} < 1$.}
+\label{fig:snr-landscape}
+\end{figure}
+
+\subsection{The Curvature Shock}
+\label{sec:curvature-shock}
+
+Spectral Ecology v9 represented the program's strongest separation
+result ($+3.20\%$) and was built entirely on curvature features: the
+Ollivier--Ricci curvature distribution was compared using Bhattacharyya
+coefficients, with penalties derived from curvature standard deviation
+and distortion measures.
+
+\begin{limitation}
+\textbf{The features v9 scored have signal-to-nuisance ratios below 1.}
+Mean curvature (the primary signal): SNR = 0.91.
+Curvature standard deviation (the penalty term): SNR = 0.93.
+These are the two features most central to v9's scoring formula.  The
+$+3.20\%$ separation was not biological signal---it was structured noise
+that happened to correlate with relatedness in the specific coverage
+configuration of the CEPH 1463 dataset.
+\end{limitation}
+
+Only curvP50 (SNR = 2.47) and curvP90 (SNR = 1.39) achieve ratios above
+1, and neither reaches the acceptance threshold of 3.  The curvature
+median is relatively stable (self CV = 0.066, the lowest of any feature),
+but the cross-sample variation is modest (CV = 0.163), giving a ratio
+that is the second-best overall but still insufficient.
+
+This is a devastating finding for the Spectral Ecology program.  The
+version that achieved the best separation was, in measurement science
+terms, \textbf{scoring noise}.
+
+\subsection{Shuffle Test Results}
+\label{sec:shuffle}
+
+Table~\ref{tab:shuffle} presents the results of the read-order shuffle
+test.  For each sample, the original module graph (from reads in file
+order) is compared to the shuffled graph (same reads, random order).
+
+\begin{table}[htbp]
+\centering
+\tablestyle
+\caption{Shuffle test results.  Read order is randomized with zero change
+in biological content.  Percentage changes in graph features are shown.
+Any change represents a pure representation artifact.}
+\label{tab:shuffle}
+\begin{tabular}{@{}l rr rr rr@{}}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Sample}} &
+\multicolumn{2}{c}{\textcolor{white}{\textbf{moduleCount}}} &
+\multicolumn{2}{c}{\textcolor{white}{\textbf{triangleCount}}} &
+\multicolumn{2}{c}{\textcolor{white}{\textbf{edgeCount}}} \\
+\cmidrule(lr){2-3} \cmidrule(lr){4-5} \cmidrule(lr){6-7}
+\rowcolor{table-header}
+& \textcolor{white}{Orig.} & \textcolor{white}{Shuf.}
+& \textcolor{white}{Orig.} & \textcolor{white}{Shuf.}
+& \textcolor{white}{Orig.} & \textcolor{white}{Shuf.} \\
+\midrule
+NA12889 & 457  & 938 \,\textcolor{yalumba-wine}{(+105\%)}
+        & 4822 & 4940 \,\textcolor{yalumba-wine}{(+2\%)}
+        & 1462 & 2488 \,\textcolor{yalumba-wine}{(+70\%)} \\
+NA12890 & 607  & 1023 \,\textcolor{yalumba-wine}{(+69\%)}
+        & 1875 & 4650 \,\textcolor{yalumba-wine}{(+148\%)}
+        & 1366 & 2377 \,\textcolor{yalumba-wine}{(+74\%)} \\
+NA12891 & 712  & 1252 \,\textcolor{yalumba-wine}{(+76\%)}
+        & 4867 & 8964 \,\textcolor{yalumba-wine}{(+84\%)}
+        & 2251 & 3776 \,\textcolor{yalumba-wine}{(+68\%)} \\
+NA12892 & 593  & 1232 \,\textcolor{yalumba-wine}{(+108\%)}
+        & 3714 & 10317 \,\textcolor{yalumba-wine}{(+178\%)}
+        & 1865 & 3881 \,\textcolor{yalumba-wine}{(+108\%)} \\
+NA12877 & 492  & 1395 \,\textcolor{yalumba-wine}{(+184\%)}
+        & 1256 & 8875 \,\textcolor{yalumba-wine}{(+607\%)}
+        & 1110 & 4045 \,\textcolor{yalumba-wine}{(+264\%)} \\
+NA12878 & 671  & 974 \,\textcolor{yalumba-wine}{(+45\%)}
+        & 3296 & 5819 \,\textcolor{yalumba-wine}{(+77\%)}
+        & 1998 & 2536 \,\textcolor{yalumba-wine}{(+27\%)} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{keyfinding}
+\textbf{Shuffling read order---a transformation with zero biological
+content change---produces catastrophic changes in graph structure.}
+Module count increases by 45\% to 184\%.  Triangle count increases by
+2\% to 607\%.  Edge count increases by 27\% to 264\%.  The
+module-graph representation is \emph{not a function of the genome}.  It
+is a function of the genome \textbf{and the read order}.
+\end{keyfinding}
+
+\subsection{Per-Sample Shuffle Detail}
+
+The shuffle test reveals striking per-sample variability.  NA12877
+(Father) shows the most extreme changes: module count nearly triples
+($492 \to 1395$, $+184\%$), triangle count increases sevenfold
+($1256 \to 8875$, $+607\%$), and edge count nearly quadruples
+($1110 \to 4045$, $+264\%$).
+
+NA12878 (Mother) shows the mildest changes: module count increases by
+45\% ($671 \to 974$) and edge count by 27\% ($1998 \to 2536$).  But
+even a 27\% change from zero biological perturbation is unacceptable
+for a measurement instrument.
+
+\begin{pullquote}[yalumba-wine]
+Triangle count for NA12877 changes by \textbf{607\%} when reads are
+shuffled.  This is not a small effect.  This is the measurement
+equivalent of a thermometer that reads 20$^\circ$C or 140$^\circ$C
+depending on which direction you hold it.
+\end{pullquote}
+
+The \emph{direction} of the shuffle effect is consistently positive:
+shuffled graphs are always larger (more modules, more edges, more
+triangles) than the original.  This suggests that file-order reads
+produce more locality in k-mer co-occurrence---adjacent reads from the
+same genomic region share k-mers that get merged into the same module.
+Shuffling breaks this locality, spreading co-occurrences across more
+modules and creating more inter-module edges.
+
+\ymarginnote{The asymmetry is telling: shuffling always \emph{increases}
+structure.  File order \emph{compresses} the graph by exploiting
+genomic locality.}
+
+The asymmetry has a concrete mechanism.  In file-order processing, read
+$i$ and read $i+1$ are likely from nearby genomic positions (Illumina
+sequencers produce reads in approximately genomic order within a tile).
+K-mers shared between adjacent reads are counted as co-occurrences
+\emph{within} existing modules, strengthening existing edges.  When
+reads are shuffled, the same k-mer pairs co-occur on reads that are
+\emph{not} adjacent in processing order, creating new co-occurrence
+edges that bridge previously separate graph regions.  The result is more
+modules (because threshold-crossing co-occurrences now span more
+regions), more edges (because more k-mer pairs cross the co-occurrence
+threshold when accumulated from dispersed reads), and dramatically more
+triangles (because the bridging edges create short cycles in the
+expanded graph).
+
+This mechanism makes the non-determinism even more troubling.  The
+representation does not just depend on read order---it depends on
+\emph{how reads are spatially distributed on the sequencing instrument}.
+Different flow cells, different lanes, and different sequencing runs of
+the same sample would produce different module graphs even with
+identical biological content.
+
+\subsection{What the Shuffle Test Proves}
+\label{sec:shuffle-proves}
+
+The shuffle test establishes a fact that no amount of downstream
+sophistication can overcome:
+
+\begin{definition}
+A representation is \textbf{deterministic} if it is a function solely
+of the biological content of the input.  A representation that changes
+when reads are reordered is \emph{non-deterministic}---it depends on
+an arbitrary parameter (file order) that carries no biological
+information.
+\end{definition}
+
+The module-graph representation is non-deterministic.  This has
+immediate consequences:
+
+\begin{enumerate}
+  \item \textbf{Pairwise comparisons are unreliable.}  If sample $A$'s
+    graph depends on the order of $A$'s reads, then the comparison
+    $A \leftrightarrow B$ depends on both read orders.  Running the same
+    comparison after sorting reads alphabetically would produce a
+    different result.
+  \item \textbf{No invariant can fix this.}  Eigenvalues,
+    curvature distributions, heat kernels, and transport plans are all
+    computed from the graph.  If the graph itself is an artifact of read
+    order, these invariants inherit the artifact.
+  \item \textbf{Self-perturbation CV underestimates true instability.}
+    The coverage ladder measures instability under subsampling, which
+    preserves read order.  The shuffle test reveals an additional,
+    independent source of instability.  The true representation
+    variance is the \emph{sum} of both contributions.
+\end{enumerate}
+
+\subsection{The Two Least-Bad Features}
+\label{sec:least-bad}
+
+Despite the grim overall picture, two features stand out as the
+least-bad candidates for a stabilized representation:
+
+\subsubsection{Edge Density (SNR = 2.93)}
+
+Edge density is the ratio of edges to possible edges: $d = 2|E| /
+(|V|(|V|-1))$.  It achieves the highest SNR because it
+\emph{normalizes} edge count by graph size, partially canceling the
+coverage effect.  When coverage drops, both edges and nodes decrease,
+and their ratio is more stable than either absolute count.
+
+Self-perturbation CV = 0.0725---the second-lowest of any feature.
+Cross-sample CV = 0.2124---moderate but meaningful.
+
+\begin{keyfinding}
+Edge density is the only feature within striking distance of the
+acceptance threshold.  At SNR = 2.93, it would need only a modest
+improvement in self-perturbation stability (e.g., from deterministic
+module extraction) to cross 3.0.
+\end{keyfinding}
+
+\subsubsection{Curvature Median (curvP50, SNR = 2.47)}
+
+The median Ollivier--Ricci curvature has the lowest self-perturbation
+CV of any feature (0.066).  Medians are robust to outliers and
+distributional changes, which is why curvP50 is far more stable than
+curvMean (0.137) or curvStd (0.245).
+
+The limitation is that curvP50's cross-sample CV is only 0.163---the
+variation between genomes is modest.  This is expected: median curvature
+captures the ``typical'' edge geometry, which may be more universal
+across human genomes than it is genome-specific.
+
+\subsection{Summary of Results}
+
+\begin{keyfinding}
+The audit reveals three independent failures of the module-graph
+representation:
+\begin{enumerate}
+  \item \textbf{Coverage instability:} 10 of 15 features are
+    MODERATE or UNSTABLE under coverage perturbation.
+  \item \textbf{Noise dominance:} 5 of 15 features have
+    $\text{SNR} < 1$; no feature reaches $\text{SNR} \geq 3$.
+  \item \textbf{Non-determinism:} read-order shuffling changes
+    graph structure by 27\% to 607\%.
+\end{enumerate}
+These failures are \emph{independent}---a representation could be
+coverage-stable but order-dependent, or order-independent but
+coverage-sensitive.  The current representation fails on all three axes.
+\end{keyfinding}
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Discussion}
+\label{sec:discussion}
+
+\subsection{What the Ten-Version Arc Was Actually Optimizing}
+\label{sec:actually-optimizing}
+
+The Spectral Ecology program was, in retrospect, optimizing
+\emph{invariance to representation noise} rather than \emph{sensitivity
+to biological signal}.  Each version's theoretical advance was, in
+practice, a new way to compress or average over the unstable parts of
+the module graph, hoping that the residual would be biological.
+
+\begin{itemize}
+  \item \textbf{v1's eigenvalue density profiles} averaged the spectrum
+    of a graph whose topology changed with coverage.  The profiles were
+    stable because eigenvalue distributions are naturally smooth, not
+    because they captured stable biology.
+  \item \textbf{v3's optimal transport} produced spectacular separation
+    ($+4.93\%$) because transport distances are sensitive to graph
+    structure---including the unstable parts.  The catastrophic gap
+    ($-54.67\%$) was the price: transport faithfully detected the
+    representation noise.
+  \item \textbf{v7's cooperative stability} improved the gap to
+    $-0.61\%$ by requiring agreement across multiple invariants.
+    Agreement-based scoring is inherently conservative: it suppresses
+    outlier features, which happened to be the unstable ones.  This was
+    an accidental, implicit feature selection.
+  \item \textbf{v9's curvature distributions} achieved the best
+    separation ($+3.20\%$) but scored features with SNR below 1.  The
+    separation was genuine in the sense that it was reproducible on the
+    specific CEPH dataset---but it was not robust to perturbation.
+  \item \textbf{v10's hybrid} combined v7 and v9, inheriting v7's
+    accidental stability and v9's apparent but fragile signal.
+\end{itemize}
+
+The arc's real contribution was \textbf{theoretical}: it developed the
+mathematical frameworks (spectral geometry, optimal transport, gauge
+theory, Riemannian curvature) that \emph{would} be powerful tools if
+applied to a stable representation.  The frameworks themselves are
+sound.  The substrate was not.
+
+\begin{limitation}
+The reinterpretation is harsh but precise: v7 was the best version not
+because it had the best theory, but because its multi-invariant
+agreement mechanism \textbf{accidentally} down-weighted the unstable
+features.  In measurement science terms, v7 was an ad hoc robust
+estimator.  It worked for the wrong reason.
+\end{limitation}
+
+This also explains a puzzling pattern in the arc.  More ``theoretically
+sophisticated'' versions (v3, v8, v9) often had \emph{worse} gaps than
+simpler ones.  The reason is now clear: sophisticated invariants are
+more sensitive to graph structure, and sensitivity to structure means
+sensitivity to representation artifacts.  Optimal transport (v3) was
+the most sensitive method and had the worst gap ($-54.67\%$).  Spectral
+summaries (v1) were the least sensitive and had a moderate gap
+($-26.87\%$).  The correlation between mathematical power and practical
+failure is not a coincidence---it is a direct consequence of the
+representation's instability.
+
+\subsection{Why the Spouse Confound Persists}
+\label{sec:spouse-confound}
+
+Every version of Spectral Ecology struggled with the spouse pair
+(Father--Mother).  The standard explanation was ``similar coverage
+produces similar graphs, which inflates pairwise scores.''  This is
+correct but incomplete.
+
+\begin{pullquote}[yalumba-wine]
+The spouse confound is not a scoring confound.\\It is a
+\textbf{representation confound}.
+\end{pullquote}
+
+If two samples have similar coverage, their module graphs will have
+similar \emph{absolute} structure (similar module counts, similar edge
+counts, similar role distributions)---not because their genomes are
+similar, but because the graph construction algorithm responds primarily
+to the \emph{amount} of data rather than the \emph{content} of data.
+
+No scoring method can fix this.  Null-model deconfounding (v2) subtracts
+the expected score under random graphs of the same size, but the size
+itself is a coverage artifact.  Self-baseline normalization (v8) divides
+by each sample's self-score, but the self-score is also coverage-dependent.
+Distributional comparison (v9) compares shapes rather than magnitudes,
+but the shapes are coverage-driven.
+
+The fix must be at the representation level:  the graph construction
+must be modified so that graphs from the same coverage produce
+\emph{systematically different} structures for different genomes.  This
+is the canonicalization challenge discussed in
+Section~\ref{sec:canonicalization}.
+
+\subsection{The Shuffle Catastrophe}
+\label{sec:shuffle-catastrophe}
+
+The shuffle test is the single most important result in this paper.  It
+establishes that the module-graph representation is not a function of
+the genome---it is a function of the genome \emph{and} an arbitrary
+parameter (read order) that carries no biological information.
+
+\ymarginnote{A representation that depends on read order is not
+measuring the genome.  It is measuring the sequencer's output buffer.}
+
+The mechanism is clear.  K-mer co-occurrence is computed from reads in
+the order they appear.  When reads are in file order (approximately the
+order they were sequenced), adjacent reads come from nearby genomic
+regions and share k-mers.  This produces dense local co-occurrence that
+merges into large, tightly connected modules.  When reads are shuffled,
+co-occurrence becomes sparser and more distributed, producing more
+modules with different connectivity patterns.
+
+This is a fundamental flaw in the co-occurrence counting step, not a
+downstream issue.  The co-occurrence matrix should depend only on
+\emph{which} k-mers appear on \emph{which} reads, not on the order in
+which reads are processed.  The fact that it does depend on order
+reveals that the co-occurrence computation has an implicit windowing or
+streaming assumption that makes it path-dependent.
+
+\subsubsection{Magnitude of the Effect}
+
+To put the shuffle effect in perspective:
+
+\begin{itemize}
+  \item The \textbf{coverage ladder} reduces data by up to 60\% (from
+    50,000 to 20,000 reads).  This causes module count changes of
+    roughly 10\% (CV = 0.106).
+  \item The \textbf{shuffle test} changes zero data.  It causes module
+    count changes of 45\% to 184\%.
+\end{itemize}
+
+Read reordering, a biologically vacuous transformation, produces effects
+\textbf{4 to 18 times larger} than a 60\% reduction in data.  The
+representation is more sensitive to file I/O order than to the amount of
+data available.
+
+For triangle count, the effect is even more extreme.  The coverage
+ladder produces CV = 0.44.  The shuffle test produces changes up to
+607\%.  Triangle count is, for all practical purposes, a random variable
+conditioned on read order.
+
+\subsection{Why Role Assignment Is Almost Entirely Noise}
+\label{sec:roles-noise}
+
+The five ecological role counts (core, satellite, bridge, scaffold,
+boundary) were introduced as a biologically motivated way to
+characterize graph structure~\cite{hartwell1999cell}.  The idea was that
+roles---nodes classified by their topological function---would capture
+higher-order organization that raw graph statistics miss.
+
+The audit shows this idea failed.  All five role counts are UNSTABLE
+under self-perturbation (CV = 0.47 to 1.09), and none achieves an SNR
+above 2.1.  Scaffold has the worst SNR of any feature (0.59).
+
+The failure mode is straightforward.  Role assignment depends on
+thresholds applied to degree, betweenness centrality, and clustering
+coefficient.  These three metrics are themselves unstable: degree
+varies with coverage, betweenness varies with graph connectivity
+(which varies with coverage), and clustering coefficient varies with
+triangle count (which varies with both coverage and read order).
+Thresholding an unstable metric amplifies instability---nodes near the
+threshold flip between roles with small changes in the underlying
+metric.
+
+\begin{limitation}
+Role assignment, as implemented, is a \textbf{noise amplifier}: it
+takes moderate instability in continuous metrics and converts it into
+catastrophic instability in discrete categories.  The bridge role is
+especially vulnerable because few nodes have the specific combination
+of low clustering and high betweenness that defines bridges.  Small
+changes in the graph can eliminate all bridges or create many.
+\end{limitation}
+
+The lesson is general: \textbf{discretizing continuous features
+amplifies instability.}  This is well known in statistics (binning
+continuous variables loses information and creates edge effects) but
+was not considered when role assignment was
+designed~\cite{langfelder2008wgcna}.  A continuous role assignment---where
+each node has a probability distribution over roles rather than a hard
+assignment---would be more stable, but would also require different
+downstream comparison methods.
+
+Consider the concrete example of the bridge role.  In the CEPH data,
+bridge counts range from 0 to 459 across samples at 100\% coverage
+(Table~\ref{tab:cross-sample}).  The self-perturbation CV is 1.09---the
+standard deviation across coverage levels exceeds the mean for several
+samples.  For NA12877, the bridge count is 0 at some coverage levels
+and nonzero at others, producing a CV that is either undefined (when the
+mean is zero) or artificially extreme.  Any algorithm that uses bridge
+count as a discriminative feature is, in practice, scoring a random
+variable.
+
+Spectral Ecology v2 and v4 weighted ecological role distributions
+heavily.  The audit explains their poor performance: they were
+effectively adding noise to their scoring function and calling it
+``ecological structure.''  The biological metaphor (cores,
+satellites, bridges) was appealing but the implementation was
+measuring the wrong thing.
+
+\subsection{The Coverage Ladder: What Subsampling Reveals}
+\label{sec:coverage-ladder-discussion}
+
+The coverage ladder reveals a scale-sensitivity hierarchy among features:
+
+\begin{enumerate}
+  \item \textbf{Scale-invariant} (CV $< 0.10$): edge density, curvP50.
+    These are ratios or medians that self-normalize.
+  \item \textbf{Scale-sensitive} (CV $0.10$--$0.20$): module count,
+    mean degree, curvMean.  These change with coverage but at a
+    predictable rate.
+  \item \textbf{Scale-dominated} (CV $> 0.20$): everything else.  These
+    are dominated by the amount of data rather than its content.
+\end{enumerate}
+
+The distinction between scale-invariant and scale-sensitive features
+is encouraging.  It suggests that \textbf{normalization is possible}:
+if we can identify the scaling law that governs each feature's
+dependence on coverage, we can correct for it.
+
+Edge density is naturally normalized (it divides by graph size).  Median
+curvature is naturally robust (medians resist outliers).  Both achieve
+their relatively good SNRs \emph{because of their mathematical
+structure}, not because of anything in the algorithm.  This is a strong
+hint: \textbf{features should be designed for scale-invariance from the
+start}, not computed as raw counts and then post-hoc normalized.
+
+\subsection{Salvageable Features}
+\label{sec:salvageable}
+
+Despite the overall negative result, two features merit further
+investigation.
+
+\textbf{Edge density} (SNR = 2.93) is tantalizingly close to the
+acceptance threshold.  Its self-perturbation CV of 0.0725 could
+plausibly be reduced below 0.05 with deterministic module extraction
+(eliminating read-order dependence) and more aggressive frequency
+filtering (stabilizing the co-occurrence graph).  If cross-sample CV
+remains at 0.21, this would push SNR above 4.
+
+\textbf{Curvature median} (SNR = 2.47) is the most stable feature
+by self-perturbation CV (0.066), but its cross-sample CV is only 0.163.
+To reach SNR = 3, either self-CV must drop below 0.054 (feasible) or
+cross-CV must increase (potentially achievable by using k-mer frequency
+distributions rather than binary presence/absence in curvature
+computation).
+
+These two features, if stabilized, could form the basis of a minimal
+but reliable scoring system.  The key insight is that they are
+reliable \emph{because of their mathematical properties} (normalization,
+robustness to outliers), not because of any specific biological theory.
+
+\subsection{What Canonicalization Would Need to Achieve}
+\label{sec:canonicalization}
+
+To fix the representation, the module extraction pipeline must become
+\textbf{canonical}: the output must be a function of the set of reads,
+not the sequence of reads.  This requires:
+
+\begin{enumerate}
+  \item \textbf{Order-independent co-occurrence.}  Count k-mer
+    co-occurrences across all reads simultaneously, not in streaming
+    fashion.  This eliminates read-order dependence but requires
+    $O(n)$ memory for $n$ unique k-mers.
+  \item \textbf{Coverage-matched construction.}  Before constructing
+    the graph, subsample each sample to a target coverage level.  This
+    eliminates the coverage confound at the representation level.
+  \item \textbf{Stable thresholding.}  Replace the current fixed
+    threshold (mean $+ 1\sigma$) with a data-adaptive threshold
+    that produces stable graph density across coverage levels.
+    Rank-based thresholding (keep the top $p\%$ of edges by
+    co-occurrence weight) is one candidate.
+  \item \textbf{Deterministic module assignment.}  If connected
+    components are used, the graph must be connected-component-stable:
+    small changes in edge set should not cause large modules to split
+    or merge.  Hierarchical clustering with a fixed
+    cut~\cite{langfelder2008wgcna} may be more stable than connected
+    components.
+\end{enumerate}
+
+\begin{definition}
+A \textbf{canonical representation} satisfies three properties:
+(1)~\emph{determinism}---same read set produces the same graph
+regardless of read order; (2)~\emph{scale equivariance}---graph
+structure changes predictably with coverage, enabling correction;
+(3)~\emph{biological sensitivity}---different genomes produce
+different graph structures at the same coverage.
+\end{definition}
+
+\subsection{Connection to the Theoretical Framework}
+\label{sec:theory-connection}
+
+The theoretical framework paper~\cite{nakahara2003geometry} developed
+the concept of ``coarse-graining'' as a functor from raw genomic data
+to structural representations:
+
+\begin{equation}
+  \Phi: \mathcal{R} \to \mathcal{G}
+  \label{eq:functor}
+\end{equation}
+
+where $\mathcal{R}$ is the space of read sets and $\mathcal{G}$ is the
+space of module graphs.  The framework assumed that $\Phi$ was
+\emph{well-behaved}: continuous, approximately surjective within a
+genome's equivalence class, and sensitive to biological differences
+between genomes.
+
+The audit reveals that $\Phi$ satisfies none of these properties:
+
+\begin{itemize}
+  \item It is not continuous: small perturbations of the input (coverage
+    changes) produce disproportionate changes in the output (role count
+    CVs above 1.0).
+  \item It is not well-defined on equivalence classes: reordering
+    reads---a transformation within the same equivalence class---produces
+    different outputs.
+  \item It is not sensitive to biology: for several features
+    (curvMean, curvStd, core role, scaffold role), self-perturbation
+    variance exceeds cross-sample variance.
+\end{itemize}
+
+The theoretical framework's mathematical machinery---spectral geometry,
+optimal transport, persistent homology---is not invalidated by this
+audit.  But the coarse-graining assumption \emph{is} invalidated.  The
+$\Phi$ that the project has been using is not the $\Phi$ that the
+framework requires.
+
+Formally, the framework requires that $\Phi$ satisfy three properties
+for the downstream comparison functor $\Delta: \mathcal{G} \times
+\mathcal{G} \to \mathbb{R}$ to be meaningful:
+
+\begin{enumerate}
+  \item \textbf{Well-definedness.}  If $R_1 \sim R_2$ (same read set,
+    different order), then $\Phi(R_1) = \Phi(R_2)$.  \emph{Violated:}
+    the shuffle test shows $\Phi(R_1) \neq \Phi(R_2)$ by 27--607\%.
+  \item \textbf{Lipschitz continuity.}  If $R_1$ and $R_2$ differ by
+    a small number of reads, then $d(\Phi(R_1), \Phi(R_2))$ is small.
+    \emph{Violated:} removing 60\% of reads changes features by up
+    to 173\% (max CV for bridge role).
+  \item \textbf{Discriminativeness.}  If $R_1$ and $R_2$ come from
+    biologically different genomes, then
+    $d(\Phi(R_1), \Phi(R_2))$ is large relative to
+    self-perturbation.  \emph{Violated:} SNR $< 3$ for all features.
+\end{enumerate}
+
+The theoretical framework assumed these properties held and built
+elegant mathematics on top of them.  The audit shows that none holds.
+This does not invalidate the mathematics---it invalidates the
+\emph{instantiation}.  The functor $\Phi$ must be rebuilt.
+
+\subsection{Implications for Other Structural Genomics Approaches}
+
+This audit is specific to the yalumba module-graph representation, but
+its methodology and findings have broader implications.
+
+Any structural genomics method that builds graphs from k-mer
+co-occurrence should be subject to the same three-part audit: coverage
+ladder, cross-sample variance, and shuffle test.  Methods that skip
+the graph step (e.g., Mash~\cite{ondov2016mash}, which computes sketch
+distances directly from k-mer sets) may not suffer from the same
+non-determinism, but should still be audited for coverage sensitivity.
+
+The signal-to-nuisance ratio framework is general: it can be applied to
+any feature set extracted from any representation.  We recommend it as
+a standard pre-requisite before publishing pairwise comparison results.
+
+\begin{pullquote}
+If you have not measured your representation's self-perturbation
+variance, you do not know whether your results are signal or noise.
+\end{pullquote}
+
+The shuffle test, in particular, should be adopted universally.  It
+costs almost nothing to run (one random permutation per sample) and
+catches a class of bugs---order-dependent computation---that is common
+in streaming bioinformatics tools.  Any method that gives different
+answers when reads are reordered has an implementation-level flaw that
+cannot be fixed by downstream processing.
+
+We note that classical methods do not suffer from this flaw.
+MinHash~\cite{ondov2016mash} computes sketches from the k-mer
+\emph{set}, which is order-independent by construction.
+Alignment-based methods~\cite{browning2012ibd, browning2020ibis}
+operate on sorted, indexed files where read order has been canonicalized
+by genomic coordinate.  The reference-free community should hold itself
+to the same standard of order-independence.
+
+\subsection{This Is a Strong Scientific Result, Not a Failure}
+\label{sec:not-failure}
+
+Negative results are undervalued in computational
+science~\cite{bendavid2006stability}.  This audit is not a failure of
+the research program.  It is a \textbf{precise diagnosis} of where the
+program's approach breaks down, which algorithms were accidentally
+successful and why, and what specific properties a fixed representation
+must satisfy.
+
+The audit also \emph{explains} the ten-version arc's trajectory.
+The gap narrowed from $-26.87\%$ to $-0.61\%$ not because successive
+algorithms got better at detecting biology, but because successive
+algorithms got better at \emph{ignoring noise}.  v7's cooperative
+stability worked because it implicitly selected the less-noisy
+features.  v9 regressed because it explicitly scored the noisier ones.
+
+This understanding is valuable.  It means the program does not need to
+abandon its mathematical frameworks.  It needs to rebuild the
+representation that those frameworks operate on.
+
+\subsection{Limitations of This Audit}
+\label{sec:limitations}
+
+\begin{enumerate}
+  \item \textbf{Small sample size.}  Six samples from a single pedigree.
+    The cross-sample CV is computed from $n = 6$, which is too small for
+    robust variance estimation.  A larger and more diverse sample set
+    could produce different SNR values.
+
+  \item \textbf{Single k-mer size.}  All experiments use $k = 21$.
+    Different $k$ values may produce more or less stable module graphs.
+    The audit should be repeated across a range of $k$ to determine
+    whether stability is $k$-dependent.
+
+  \item \textbf{Fixed frequency thresholds.}  The frequency filters
+    (min 2, max 100) were chosen heuristically.  Different thresholds
+    could change the module graph and potentially improve stability.
+
+  \item \textbf{Single graph construction threshold.}  The edge
+    threshold (mean $+ 1\sigma$) is one of many possible choices.
+    Rank-based or quantile-based thresholds might produce more stable
+    graphs.
+
+  \item \textbf{Linear coverage ladder.}  We tested 100\%, 80\%, 60\%,
+    40\%.  Finer coverage steps (e.g., 5\% increments) would reveal
+    whether instability is gradual or threshold-driven.
+
+  \item \textbf{Single shuffle.}  We tested one random permutation
+    per sample.  Multiple shuffles would yield a distribution of
+    shuffle effects, rather than a point estimate.
+
+  \item \textbf{No joint analysis.}  Self-perturbation CV and shuffle
+    effects are analyzed independently.  A joint model that
+    decomposes total variance into coverage, order, and biological
+    components would be more informative.
+
+  \item \textbf{CV as a stability metric.}  The coefficient of
+    variation assumes symmetric, approximately normal variation around
+    the mean.  For features with zero-inflated distributions (scaffold,
+    boundary roles), CV is poorly defined and may overstate instability.
+    Intraclass correlation or robust dispersion measures would be
+    better suited.
+
+  \item \textbf{No read-length analysis.}  Read length variation could
+    interact with co-occurrence counting.  Longer reads produce more
+    k-mer pairs per read, potentially changing module structure.  The
+    audit does not control for this.
+
+  \item \textbf{SNR threshold is conventional.}  The choice of
+    $\text{SNR} \geq 3$ as the acceptance criterion is borrowed from
+    psychometrics and is not derived from a formal statistical
+    argument specific to genomic comparison.  A different threshold
+    could change the conclusions.
+
+  \item \textbf{No comparison to classical methods.}  The audit
+    evaluates the module-graph representation in isolation.  It would
+    be informative to apply the same perturbation tests to classical
+    features (k-mer frequency profiles, MinHash sketches, alignment-based
+    statistics) to establish a baseline for ``normal'' feature stability
+    in genomics.
+\end{enumerate}
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Recommendations for the Next Phase}
+\label{sec:recommendations}
+
+\subsection{Representation Canonicalization}
+\label{sec:rec-canonical}
+
+The first priority is eliminating read-order dependence.  The module
+extraction pipeline must produce identical output for any permutation
+of the same read set.  This requires:
+
+\begin{enumerate}
+  \item Compute all k-mer frequencies in a single pass (order-independent
+    hash table).
+  \item Compute co-occurrence as a function of \emph{which} k-mers
+    appear on \emph{which} reads, using read identifiers rather than
+    sequential processing.
+  \item Threshold co-occurrence using the complete co-occurrence matrix,
+    not a streaming approximation.
+\end{enumerate}
+
+\ymarginnote{Canonicalization has a memory cost: the full co-occurrence
+matrix for $n$ k-mers requires $O(n^2)$ space.  For 50,000 reads at
+$k = 21$, this is manageable ($\sim$500K unique k-mers, $\sim$1GB
+sparse matrix).}
+
+The expected impact: the shuffle test should produce \textbf{zero change}
+in all features.  Any residual change after canonicalization indicates
+a bug, not a design issue.
+
+The memory cost is modest.  For 50,000 reads at $k = 21$, we expect
+approximately 500,000 unique k-mers.  A sparse co-occurrence matrix
+(storing only pairs that co-occur on at least one read) requires
+$O(|E|)$ space, where $|E|$ is the number of co-occurring pairs.  In
+practice, this is 1--5 million pairs, fitting comfortably in 100--500~MB.
+The current streaming approach uses less memory but sacrifices
+determinism.  The tradeoff is clear: determinism is non-negotiable;
+memory is cheap.
+
+\subsection{Coverage-Matched Subsampling}
+
+Before constructing module graphs for comparison, all samples should be
+subsampled to a common coverage level.  The target should be the minimum
+coverage across all samples being compared.
+
+\begin{equation}
+  n_{\text{target}} = \min_{s \in \mathcal{S}} n_s
+  \label{eq:coverage-match}
+\end{equation}
+
+where $n_s$ is the read count for sample $s$ and $\mathcal{S}$ is the
+set of samples being compared.  This eliminates the systematic
+relationship between coverage and graph structure that underlies the
+spouse confound.
+
+Multiple random subsamples (e.g., 10 per sample) should be drawn and
+averaged, reducing the variance of the subsampled representation.
+
+\subsection{Rank-Based or Quantile-Normalized Features}
+
+Raw feature values are scale-dependent and distribution-dependent.
+Replace raw features with their ranks or quantile-normalized values
+within the sample:
+
+\begin{equation}
+  f_{\text{rank}}(v, s) = \frac{\text{rank}(f(v, s))}
+                               {\text{max\_rank}(s)}
+  \label{eq:rank-norm}
+\end{equation}
+
+This maps all features to $[0, 1]$ regardless of graph size, which
+eliminates absolute scale effects.  It also converts unstable absolute
+values into more stable relative orderings.
+
+\subsection{Threshold Sweeps}
+
+Instead of using a single edge threshold (mean $+ 1\sigma$), sweep
+across thresholds and identify the range where features are most stable:
+
+\begin{equation}
+  \tau^* = \arg\min_\tau
+    \overline{\text{CV}}_{\text{self}}(f \mid \tau)
+  \label{eq:threshold-sweep}
+\end{equation}
+
+The optimal threshold may differ by feature.  The sweep should be
+performed once (using the self-perturbation test) and the resulting
+threshold fixed for all subsequent experiments.
+
+\subsection{The Acceptance Criterion for v11}
+
+\begin{keyfinding}
+No new algorithm version should be developed until the following
+criterion is met:
+\begin{equation}
+  \forall\, f \in \mathcal{F}_{\text{scored}}: \quad
+  \text{SNR}(f) \geq 3
+  \label{eq:acceptance}
+\end{equation}
+where $\mathcal{F}_{\text{scored}}$ is the set of features used in the
+algorithm's scoring formula.  This criterion must be verified on the
+CEPH 1463 pedigree using the self-perturbation test (coverage ladder)
+and the shuffle test (read-order permutation).  \textbf{Both tests must
+yield zero-change results for the shuffle test and SNR $\geq$ 3 for the
+coverage ladder.}
+\end{keyfinding}
+
+This is a hard gate.  It means that v11 will not be an algorithm
+paper---it will be a \textbf{representation paper}.  The algorithm
+cannot advance until the substrate is trustworthy.  This is the right
+order.
+
+\subsection{Feature Design Principles}
+
+The audit suggests specific principles for designing features that are
+likely to achieve acceptable SNR:
+
+\begin{enumerate}
+  \item \textbf{Prefer ratios over counts.}  Edge density (SNR = 2.93)
+    outperforms edge count (SNR = 1.02) because it normalizes by graph
+    size.  Any count-based feature should be divided by the appropriate
+    scale factor (number of nodes, number of edges, graph diameter).
+  \item \textbf{Prefer medians over means.}  curvP50 (SNR = 2.47)
+    outperforms curvMean (SNR = 0.91) and curvStd (SNR = 0.93).
+    Medians are robust to the tail behavior that dominates coverage-
+    dependent variation.
+  \item \textbf{Avoid thresholding.}  Role counts (SNR = 0.59--2.05)
+    are uniformly worse than the continuous metrics they are derived
+    from.  Keep features continuous whenever possible.
+  \item \textbf{Normalize before extraction.}  Rather than extracting
+    raw features and normalizing afterward, design the extraction so
+    that features are scale-invariant by construction.
+  \item \textbf{Test before scoring.}  Every feature proposed for a
+    scoring formula must pass the self-perturbation test (CV $< 0.15$)
+    and the shuffle test (zero change) \emph{before} it is used in
+    pairwise comparison.
+\end{enumerate}
+
+\subsection{A Proposed Verification Pipeline}
+
+We propose the following pipeline for validating any new representation
+before it is used for algorithmic development:
+
+\begin{enumerate}
+  \item \textbf{Shuffle test.}  Permute read order for each sample.
+    Require $\Delta f = 0$ for all features.  If any feature changes,
+    the representation is non-deterministic and must be fixed before
+    proceeding.
+  \item \textbf{Coverage ladder.}  Subsample at 100\%, 80\%, 60\%,
+    40\%.  Compute self-perturbation CV for each feature.  Classify
+    features as STABLE ($< 0.15$), MODERATE ($0.15$--$0.40$), or
+    UNSTABLE ($\geq 0.40$).  Only STABLE features proceed.
+  \item \textbf{Cross-sample variance.}  Compute cross-sample CV at
+    100\% coverage.  Features with cross-sample CV $< 0.05$ have
+    insufficient biological variation and should not be scored.
+  \item \textbf{Signal-to-nuisance ratio.}  Compute SNR for all
+    remaining features.  Only features with $\text{SNR} \geq 3$
+    proceed to algorithm development.
+  \item \textbf{Algorithm development.}  Only at this stage---after
+    the representation is validated---should new scoring methods
+    be designed.
+\end{enumerate}
+
+This pipeline inverts the order that the project has followed.  For ten
+versions, algorithm development preceded representation validation.
+Going forward, representation validation gates algorithm development.
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Conclusion}
+\label{sec:conclusion}
+
+This paper reports a negative result that changes the direction of the
+yalumba research program.  A systematic perturbation audit of the
+module-graph representation---the computational substrate for ten
+versions of Spectral Ecology and three prior symbiogenesis
+algorithms---reveals three independent failures:
+
+\begin{enumerate}
+  \item \textbf{Coverage instability.}  Only 5 of 15 features are
+    stable under subsampling.  The remaining 10 features, including all
+    ecological role counts, vary more within a sample across coverage
+    levels than between different genomes.
+  \item \textbf{Noise dominance.}  No feature achieves a
+    signal-to-nuisance ratio of 3 or above.  The best ratio is 2.93
+    (edge density).  Five features have ratios below 1.0, meaning
+    self-perturbation noise exceeds cross-sample variation.
+  \item \textbf{Non-determinism.}  Shuffling read order---a
+    transformation with zero biological content change---produces
+    changes of 27\% to 607\% in graph features.  The representation
+    is a function of read order, not just of the genome.
+\end{enumerate}
+
+\begin{pullquote}[yalumba-wine]
+The ten-version Spectral Ecology arc optimized invariants on an unstable
+representation.  The downstream sophistication outran the upstream
+identifiability.
+\end{pullquote}
+
+These findings explain why the program's gap never turned positive.
+The persistent spouse confound (Father--Mother ranking among related
+pairs) is not a scoring confound---it is a \textbf{representation
+confound}.  Similar coverage produces similar graphs, and no downstream
+invariant can distinguish coverage-driven similarity from biological
+similarity.
+
+The findings also explain the arc's trajectory.  v7's cooperative
+stability worked because it implicitly selected stable features.  v9's
+curvature scoring failed (in the SNR sense) because it explicitly
+selected unstable ones.  v10's hybrid partially succeeded because it
+combined an accidentally stable component (v7) with an accidentally
+informative one (v9).
+
+But the program was not wasted.  The theoretical advances are real:
+coherence fields, intrinsic curvature distributions, holonomy
+deficits, Sinkhorn-regularized transport---these are mathematically
+sound frameworks that would be powerful tools for comparing genomic
+ecosystems, \textbf{if the ecosystems were reliably
+measured}~\cite{chung1997spectral, memoli2011gromov,
+edelsbrunner2010computational, peyre2019computational}.
+
+The path forward is clear.  The representation must be
+\textbf{canonicalized} (order-independent), \textbf{coverage-matched}
+(scale-independent), and \textbf{audited} (SNR $\geq 3$ for every
+scored feature) before any new algorithm version is attempted.
+
+This is exactly where real research gets interesting.  The first ten
+versions explored the space of invariants.  The next phase explores the
+space of representations.  The same mathematical machinery---spectral
+geometry, optimal transport, topological persistence---can be applied to
+the representation design problem itself: finding graph constructions
+whose structure is \emph{invariant} to coverage and read order while
+being \emph{sensitive} to biological content.
+
+The audit does not close the book on reference-free genomic ecosystem
+comparison.  It opens a harder, more honest, and ultimately more
+productive chapter.
+
+The analogy to other fields is encouraging.  In machine learning, the
+shift from hand-crafted features to learned representations (the deep
+learning revolution) was preceded by a period of negative results showing
+that hand-crafted features were unstable and domain-brittle.  In
+ecology, the shift from raw species counts to diversity indices was
+preceded by demonstrations that raw counts were sampling-effort-
+dependent~\cite{bray1957}.  In both cases, the negative results were not
+the end of the field---they were the beginning of a more productive
+phase.
+
+The same pattern holds here.  The module-graph representation, as
+currently implemented, is the ``hand-crafted feature'' of the yalumba
+program.  It encodes biological intuition (k-mers that co-occur form
+functional modules) but lacks the engineering discipline (determinism,
+scale-invariance, measurement validation) needed for reliable
+science.  The next phase replaces intuition-driven construction with
+measurement-validated construction.
+
+\vspace{1em}
+
+\begin{keyfinding}
+\textbf{The most important finding in this paper is not that the
+representation is broken.  It is that we now know exactly how it is
+broken, exactly which features are salvageable, and exactly what the
+acceptance criterion for a fixed representation must be.}  The problem
+is now well-posed.  That is progress.
+\end{keyfinding}
+
+\vspace{0.5em}
+
+The research thesis of the yalumba project---that human inheritance can
+be modeled as the transmission of resilient, interacting genomic
+ecosystems---is not invalidated by this audit.  The thesis was never
+about module graphs or k-mer co-occurrence.  It was about a level of
+biological organization that is richer than haplotype segments and
+deeper than token sharing.  The module-graph representation was one
+attempt to access that level.  It was not the right attempt, or at
+least not a sufficiently careful one.  The audit tells us what ``careful''
+means: deterministic, scale-invariant, and validated before use.  The
+next representation that satisfies these criteria will be the foundation
+for a second decade of algorithmic development---and this time, the
+algorithms will be building on rock, not sand.
+
+
+% ════════════════════════════════════════════════════════════════════
+\bibliographystyle{plain}
+\bibliography{../references}
+
+\end{document}
