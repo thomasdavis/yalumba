@@ -16,7 +16,7 @@
  *          adjacency coincidences.
  */
 
-import { buildModules } from "@yalumba/modules";
+import { buildModulesCanonical } from "@yalumba/modules";
 import type { ModuleExtractionOptions } from "@yalumba/modules";
 import { extractMotifsWithPositions } from "@yalumba/modules";
 import type { InteractionGraph } from "./types.js";
@@ -44,7 +44,7 @@ export function buildInteractionGraph(
   options: ModuleExtractionOptions = DEFAULT_OPTIONS,
   edgeThreshold: number = 0.01,
 ): InteractionGraph {
-  const modules = buildModules(reads, options);
+  const modules = buildModulesCanonical(reads, options);
   if (modules.length === 0) return emptyGraph();
 
   const k = options.motifK ?? 15;

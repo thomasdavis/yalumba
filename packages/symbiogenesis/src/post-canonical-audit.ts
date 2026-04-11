@@ -17,8 +17,8 @@
 import { join } from "path";
 import { existsSync } from "fs";
 import { FastqParser } from "@yalumba/fastq";
-import { buildModulesCanonical, buildModuleGraph } from "@yalumba/modules";
 import {
+  buildInteractionGraph,
   normalizedLaplacian,
   eigenDecomposition,
   assignRoles,
@@ -106,23 +106,22 @@ function shuffle(reads: string[], seed: number): string[] {
 }
 
 function extractFeatures(reads: string[], sampleId: string): FeatureVector {
-  // USE CANONICAL BUILDER
-  const modules = buildModulesCanonical(reads, EXTRACT_OPTS);
-  const graph = buildModuleGraph(reads, modules, EXTRACT_OPTS.motifK ?? 15);
-  const n = modules.length;
+  // Uses buildInteractionGraph which now calls buildModulesCanonical internally
+  const graph = buildInteractionGraph(reads, EXTRACT_OPTS);
+  const n = graph.n;
+  const A = graph.adjacency.data;
 
-  // Build adjacency from graph edges
-  const adj = new Float64Array(n * n);
-  for (const edge of graph.edges) {
-    adj[edge.from * n + edge.to] = edge.weight;
-    adj[edge.to * n + edge.from] = edge.weight;
-  }
-
-  let edgeCount = graph.edges.length;
+  // Count edges and degrees
+  let edgeCount = 0;
   const degrees = new Float64Array(n);
-  for (const edge of graph.edges) {
-    degrees[edge.from]!++;
-    degrees[edge.to]!++;
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      if (A[i * n + j]! > 1e-12) {
+        edgeCount++;
+        degrees[i]!++;
+        degrees[j]!++;
+      }
+    }
   }
 
   const meanDegree = n > 0 ? [...degrees].reduce((s, v) => s + v, 0) / n : 0;
@@ -133,31 +132,22 @@ function extractFeatures(reads: string[], sampleId: string): FeatureVector {
   let triangleCount = 0;
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
-      if (adj[i * n + j]! < 1e-12) continue;
+      if (A[i * n + j]! < 1e-12) continue;
       for (let k = j + 1; k < n; k++) {
-        if (adj[j * n + k]! < 1e-12) continue;
-        if (adj[i * n + k]! < 1e-12) continue;
+        if (A[j * n + k]! < 1e-12) continue;
+        if (A[i * n + k]! < 1e-12) continue;
         triangleCount++;
       }
     }
   }
 
-  // Curvature (simplified — use patch distances for triangles)
+  // Curvature via ecology pipeline
   let curvMean = 0, curvStd = 0, curvP50 = 0, curvP90 = 0;
-
   if (n >= 3 && edgeCount >= 3) {
-    // Edge compatibility: patch distance
-    const psi = new Float64Array(n * n);
-    const laplacian = normalizedLaplacian({ data: adj, rows: n, cols: n });
+    const laplacian = normalizedLaplacian(graph.adjacency);
     const eigen = eigenDecomposition(laplacian);
-    const roles = assignRoles(
-      { n, modules, adjacency: { data: adj, rows: n, cols: n }, readCount: reads.length },
-      eigen,
-    );
-    const patches = extractPatches(sampleId,
-      { n, modules, adjacency: { data: adj, rows: n, cols: n }, readCount: reads.length },
-      roles,
-    );
+    const roles = assignRoles(graph, eigen);
+    const patches = extractPatches(sampleId, graph, roles);
     const profile = computeCurvatureProfile(patches);
     curvMean = profile.mean;
     curvStd = profile.std;
