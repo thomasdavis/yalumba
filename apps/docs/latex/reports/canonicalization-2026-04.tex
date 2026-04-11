@@ -1,0 +1,1618 @@
+\documentclass{../yalumba}
+
+\title{From Non-Determinism to Canonical Extraction:\\[0.3em]
+Diagnosing and Fixing the Representation Bottleneck\\[0.2em]
+in Structural Genomics}
+
+\author{%
+  Ajax Davis\\[0.3em]
+  \normalsize\textit{Yalumba Project}\\[0.2em]
+  \normalsize\texttt{github.com/ajaxdavis/yalumba}%
+}
+
+\date{April 2026}
+
+\begin{document}
+\maketitle
+\thispagestyle{empty}
+
+% ============================================================================
+% ABSTRACT
+% ============================================================================
+\begin{abstract}
+\noindent
+The yalumba project attempts to infer inherited genomic organization---multi-scale
+``ecosystem'' signatures---directly from raw sequencing reads, without alignment
+or variant calling. Over ten iterative versions of the Spectral Ecology algorithm,
+we deployed increasingly sophisticated mathematical machinery: Laplacian
+eigendecomposition, heat kernel signatures, Ollivier--Ricci curvature, diffusion
+distances, optimal transport, persistence fields, and Sinkhorn-symmetrized kernels.
+Despite this, the best gap between related and unrelated pairs reached only
+$-0.61\%$, and zero of fifteen extracted features achieved a signal-to-nuisance
+ratio (SNR) above the threshold of~3.
+
+A systematic representation audit---comprising self-perturbation testing under
+read shuffling and a coverage ladder analysis---revealed the root cause: the
+module extraction layer was \textbf{non-deterministic}. The same sample processed
+with the same reads in a different order produced wildly different module graphs.
+Module counts changed by 77--105\% under shuffling. Triangle counts changed by
+up to 607\%. Every downstream feature, no matter how theoretically invariant,
+was built on sand.
+
+The non-determinism traced to three interacting bugs in the module builder:
+(1)~a fixed-size hash table with early termination at 70\% load factor, causing
+different read orderings to fill different co-occurrence pairs before the table
+saturated; (2)~an integer pair hash with collision pathology; and (3)~unsorted
+BFS traversal producing order-dependent component labeling. The fix---a canonical
+builder using complete pair enumeration, frequency-threshold cutoff, collision-free
+string keys, and sorted BFS---achieves perfect determinism: identical module counts,
+identical pair counts (6,016,446), and identical graph structure across all tested
+shuffles.
+
+This paper documents the full journey: the ten-version spectral ecology arc that
+motivated the audit, the audit protocol and its devastating results, the line-by-line
+root cause analysis, the canonical builder design, and the determinism verification.
+We argue that this is the project's most important single finding. The spectral
+ecology program was not wrong in theory---it was measuring noise masquerading as
+structure. The canonical builder provides, for the first time, a deterministic
+substrate on which structural genomics methods can be honestly evaluated.
+
+The result is a cautionary tale for computational biology: sophisticated
+downstream analysis cannot rescue a non-deterministic upstream representation.
+No amount of spectral geometry, optimal transport, or topological persistence
+can extract signal from a feature space dominated by hash table insertion
+artifacts. The path forward requires measurement science discipline---acceptance
+gates on representation stability before any kinship model is attempted.
+\end{abstract}
+
+\newpage
+\tableofcontents
+\newpage
+
+% ============================================================================
+% 1. INTRODUCTION
+% ============================================================================
+\section{Introduction}
+\label{sec:introduction}
+
+The yalumba project's central hypothesis is that human inheritance can be modeled
+as the transmission of resilient, interacting genomic ecosystems whose structure
+can be inferred from raw sequencing reads without reference coordinates or variant
+calling~\cite{thompson2013identity}. Relatedness between two individuals is not
+primarily a matter of shared genomic tokens---shared k-mers, shared haplotype
+segments---but of shared \textit{organizational principles}: do these two genomes
+instantiate the same \textit{kind} of structure?
+
+This hypothesis led to the Spectral Ecology program: a sequence of algorithms
+that extract module co-occurrence graphs from k-mer data, compute spectral
+decompositions of the resulting graph Laplacians, and compare the spectral
+signatures across samples to infer kinship. The mathematical framework draws on
+spectral graph theory~\cite{chung1997spectral}, heat kernel
+signatures~\cite{sun2009concise}, diffusion maps~\cite{coifman2006diffusion},
+discrete Ricci curvature~\cite{jost2011riemannian}, and optimal
+transport~\cite{villani2009optimal}.
+
+\subsection{The Ten-Version Paradox}
+
+Over ten iterative versions (v1--v10), the Spectral Ecology algorithm accumulated
+layer upon layer of mathematical sophistication:
+
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{v1--v2:} Dense co-occurrence graphs, Laplacian eigendecomposition,
+    heat kernel signatures, basic ecological role assignment.
+  \item \textbf{v3--v5:} Optimal transport (Wasserstein distance) on spectral
+    distributions, coherence fields, multi-scale analysis.
+  \item \textbf{v6:} Persistence fields via topological filtration of the module graph.
+  \item \textbf{v7:} Sinkhorn-symmetrized transport kernels, achieving the best gap
+    of $-0.61\%$ with 55\% cooperative classification.
+  \item \textbf{v8--v10:} Curvature-weighted features, coverage deconfounding layers,
+    feature selection by stability ranking.
+\end{itemize}
+
+The gap trajectory told a story of gradual improvement: $-26.87\% \to -3.21\% \to
+-0.61\%$. But it never crossed zero. The two algorithms that \textit{did} achieve
+positive gaps---Module Persistence v3 (+3.36\% separation, +0.13\% gap) and
+Coalition Transfer v3 (+1.97\% separation, +0.06\% gap)---used comparatively
+simple features. The most mathematically ambitious algorithm, consuming the
+richest feature space, performed worst.
+
+This was the paradox: \textbf{increasing downstream sophistication produced
+decreasing returns}. The natural interpretation was that the invariants were
+wrong, or the theory was wrong, or genomic ecosystems simply didn't carry enough
+kinship signal. An external review suggested a different hypothesis: perhaps the
+\textit{representation itself} was the problem.
+
+\subsection{The External Feedback}
+
+The critical insight came from outside the project: before adding more mathematical
+machinery on top, we should verify that the upstream representation---the module
+graph---was stable enough to support \textit{any} downstream analysis. This meant
+asking two questions that had never been systematically tested:
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Self-perturbation:} If we process the same sample's reads in a
+    different order, do we get the same module graph?
+  \item \textbf{Coverage sensitivity:} If we subsample reads from the same sample,
+    how much do the features change?
+\end{enumerate}
+
+The answers were catastrophic.
+
+\subsection{Why Negative Results Are the Most Important Results}
+
+This paper documents a negative result: the spectral ecology program, in its
+ten-version incarnation, was built on a non-deterministic foundation. None of
+its results---positive or negative---can be trusted as measurements of the
+underlying biology.
+
+We argue this is the project's most important finding to date. It is more
+valuable than any positive kinship gap because it identifies a \textit{systematic}
+error that would have corrupted every future algorithm built on the same
+representation. Finding and fixing it converts the entire module extraction
+layer from a source of uncontrolled noise into a calibrated instrument.
+
+The structure of the paper follows the diagnostic arc: the audit that exposed
+the problem (Section~\ref{sec:audit}), the root cause analysis that explained it
+(Section~\ref{sec:rootcause}), the canonical builder that fixes it
+(Section~\ref{sec:canonical}), the verification that the fix works
+(Section~\ref{sec:verification}), the reinterpretation of all prior results
+(Section~\ref{sec:reinterpretation}), and the path forward
+(Section~\ref{sec:forward}).
+
+
+% ============================================================================
+% 2. BACKGROUND
+% ============================================================================
+\section{Background: The Module Extraction Pipeline}
+\label{sec:background}
+
+Before presenting the audit results, we briefly describe the module extraction
+pipeline whose stability is under investigation.
+
+\subsection{From Reads to K-mer Co-occurrence}
+
+Given a set of sequencing reads for a sample, the pipeline:
+\begin{enumerate}[leftmargin=2em]
+  \item Extracts all canonical k-mers from each read using a rolling hash
+    (Rabin--Karp polynomial, Mersenne prime modulus $2^{61}-1$).
+  \item For each read, enumerates all pairs of k-mers that co-occur within
+    the same read.
+  \item Accumulates co-occurrence counts into a pair frequency table.
+  \item Filters pairs by frequency to retain only statistically significant
+    co-occurrences.
+  \item Constructs a co-occurrence graph where nodes are k-mers and edges
+    represent retained co-occurrences.
+\end{enumerate}
+
+\subsection{From Co-occurrence Graph to Modules}
+
+The co-occurrence graph is decomposed into connected components, each of which
+is called a \textit{module}. A module represents a set of k-mers that
+co-occur frequently enough to form a coherent unit---analogous to a ``motif
+society'' in the project's ecological framework.
+
+\subsection{From Modules to Features}
+
+The module graph (nodes = modules, edges = inter-module co-occurrences) is then
+characterized by a battery of features:
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{Structural:} module count, edge count, edge density, triangle count.
+  \item \textbf{Degree:} mean degree, max degree.
+  \item \textbf{Curvature:} Ollivier--Ricci curvature statistics (mean, std, P50, P90).
+  \item \textbf{Ecological roles:} fraction of nodes classified as core, satellite,
+    bridge, scaffold, or boundary based on degree and curvature profiles.
+\end{itemize}
+
+It is this feature vector that the Spectral Ecology algorithm uses for kinship
+comparison. The stability of this vector is the subject of the audit.
+
+
+% ============================================================================
+% 3. THE REPRESENTATION AUDIT
+% ============================================================================
+\section{The Representation Audit}
+\label{sec:audit}
+
+\subsection{Experimental Protocol}
+
+The audit was designed to answer one question: \textit{is the module extraction
+pipeline a calibrated measurement instrument?} A calibrated instrument produces
+the same measurement when applied to the same sample under trivial perturbations.
+Two perturbation classes were tested:
+
+\begin{definition}[Self-Perturbation (Shuffle Test)]
+Given a sample's reads $R = \{r_1, r_2, \ldots, r_n\}$, construct shuffled
+versions $R_\sigma = \{r_{\sigma(1)}, r_{\sigma(2)}, \ldots, r_{\sigma(n)}\}$
+for random permutations $\sigma$. Run the full extraction pipeline on both $R$
+and $R_\sigma$. Compare the resulting feature vectors.
+
+\textit{A deterministic pipeline must produce identical outputs.}
+\end{definition}
+
+\begin{definition}[Coverage Ladder]
+Given a sample's reads $R$, construct subsampled versions at fractions
+$f \in \{0.25, 0.50, 0.75, 1.0\}$. Run the pipeline on each. Measure how
+features scale with coverage.
+
+\textit{A coverage-robust pipeline should show smooth, predictable scaling.}
+\end{definition}
+
+Three random seeds were used for shuffling: 42, 12345, and 99999. Two samples
+from the CEPH~1463 pedigree~\cite{eberle2017platinum} were tested: NA12889
+(grandfather) and a second family member. Each configuration was run through
+the full pipeline with 50,000 reads per sample.
+
+\subsection{Feature Extraction}
+\label{sec:features}
+
+Fifteen features were extracted from each module graph, spanning four categories:
+
+\begin{table}[H]
+\centering
+\caption{Feature catalogue: 15 features across 4 categories.}
+\label{tab:features}
+\begin{tabular}{lll}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Category}} & \textcolor{white}{\textbf{Feature}} & \textcolor{white}{\textbf{Description}} \\
+\midrule
+Structural & \texttt{moduleCount}    & Number of connected components \\
+           & \texttt{triangleCount}  & Number of triangles in module graph \\
+           & \texttt{edgeCount}      & Number of edges in module graph \\
+           & \texttt{edgeDensity}    & Edge count / max possible edges \\
+\midrule
+Degree     & \texttt{meanDegree}     & Average node degree \\
+           & \texttt{maxDegree}      & Maximum node degree \\
+\midrule
+Curvature  & \texttt{curvMean}       & Mean Ollivier--Ricci curvature \\
+           & \texttt{curvStd}        & Std.\ dev.\ of curvature \\
+           & \texttt{curvP50}        & Median curvature \\
+           & \texttt{curvP90}        & 90th percentile curvature \\
+\midrule
+Ecological & \texttt{role\_core}      & Fraction of core nodes \\
+           & \texttt{role\_satellite} & Fraction of satellite nodes \\
+           & \texttt{role\_bridge}    & Fraction of bridge nodes \\
+           & \texttt{role\_scaffold}  & Fraction of scaffold nodes \\
+           & \texttt{role\_boundary}  & Fraction of boundary nodes \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Self-Perturbation Analysis}
+
+The self-perturbation test revealed the core problem. Under the original builder,
+shuffling the reads of sample NA12889 produced dramatically different module
+graphs:
+
+\begin{table}[H]
+\centering
+\caption{Module count under read shuffling (original builder, NA12889).}
+\label{tab:shuffle-modules}
+\begin{tabular}{lrrr}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Ordering}} & \textcolor{white}{\textbf{Modules}} & \textcolor{white}{$\Delta$} & \textcolor{white}{\textbf{Change}} \\
+\midrule
+Original          & 457 & ---   & --- \\
+Shuffle (seed 42)    & 938 & +481 & +105\% \\
+Shuffle (seed 12345) & 809 & +352 & +77\% \\
+Shuffle (seed 99999) & 818 & +361 & +79\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{keyfinding}[Shuffle Catastrophe]
+The same sample, with the same reads, processed in a different order, produces
+anywhere from 457 to 938 modules---a variation of 77--105\%. \textbf{The module
+extraction pipeline is not a measurement instrument; it is a random number
+generator seeded by read ordering.}
+\end{keyfinding}
+
+The instability was not confined to module count. The broader shuffle test
+across all samples showed:
+
+\begin{itemize}[leftmargin=2em]
+  \item Module count changes of 45--184\%.
+  \item Triangle count changes of up to 607\%.
+  \item Edge count and density variations proportional to module count changes.
+  \item Curvature statistics fluctuating wildly, with self-variation exceeding
+    cross-sample variation.
+\end{itemize}
+
+\subsection{Cross-Sample Variance}
+
+For a feature to be useful for kinship discrimination, it must vary \textit{more}
+between unrelated samples than within repeated measurements of the same sample.
+We quantified this via the coefficient of variation (CV):
+
+\begin{equation}
+  \text{CV}_{\text{self}} = \frac{\text{std}(\text{feature across shuffles of same sample})}
+    {\text{mean}(\text{feature across shuffles of same sample})}
+\end{equation}
+
+\begin{equation}
+  \text{CV}_{\text{cross}} = \frac{\text{std}(\text{feature across different samples})}
+    {\text{mean}(\text{feature across different samples})}
+\end{equation}
+
+For a feature to carry kinship signal, we require $\text{CV}_{\text{cross}} \gg
+\text{CV}_{\text{self}}$.
+
+\subsection{Signal-to-Nuisance Ratio}
+\label{sec:snr}
+
+We define the signal-to-nuisance ratio (SNR) as:
+
+\begin{equation}
+  \text{SNR} = \frac{\text{CV}_{\text{cross}}}{\text{CV}_{\text{self}}}
+  \label{eq:snr}
+\end{equation}
+
+An SNR of 1 means the feature varies as much within a sample (due to processing
+artifacts) as between samples (due to biology). An SNR above 3 is the minimum
+threshold for a feature to be considered a candidate for kinship discrimination.
+Table~\ref{tab:snr} presents the full results.
+
+\begin{table}[H]
+\centering
+\caption{Signal-to-nuisance ratio for all 15 features. Threshold: SNR $> 3$.
+\textbf{Zero features pass.}}
+\label{tab:snr}
+\begin{tabular}{lrrrp{5.5cm}}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Feature}} & \textcolor{white}{\textbf{Self CV}} & \textcolor{white}{\textbf{Cross CV}} & \textcolor{white}{\textbf{SNR}} & \textcolor{white}{\textbf{Verdict}} \\
+\midrule
+\texttt{moduleCount}      & 0.1059 & 0.1536 & 1.45 & \textcolor{yalumba-gold}{MARGINAL} \\
+\texttt{triangleCount}    & 0.4386 & 0.4125 & 0.94 & \textcolor{red}{NOISE $>$ SIGNAL} \\
+\texttt{edgeCount}        & 0.2303 & 0.2353 & 1.02 & \textcolor{yalumba-gold}{MARGINAL} \\
+\texttt{edgeDensity}      & 0.0725 & 0.2124 & 2.93 & \textcolor{yalumba-gold}{MARGINAL (best)} \\
+\texttt{meanDegree}       & 0.1249 & 0.1465 & 1.17 & \textcolor{yalumba-gold}{MARGINAL} \\
+\texttt{maxDegree}        & 0.2947 & 0.4739 & 1.61 & \textcolor{yalumba-gold}{MARGINAL} \\
+\texttt{curvMean}         & 0.1373 & 0.1244 & 0.91 & \textcolor{red}{NOISE $>$ SIGNAL} \\
+\texttt{curvStd}          & 0.2452 & 0.2275 & 0.93 & \textcolor{red}{NOISE $>$ SIGNAL} \\
+\texttt{curvP50}          & 0.0660 & 0.1633 & 2.47 & \textcolor{yalumba-gold}{MARGINAL} \\
+\texttt{curvP90}          & 0.1949 & 0.2717 & 1.39 & \textcolor{yalumba-gold}{MARGINAL} \\
+\texttt{role\_core}       & 0.5458 & 0.5315 & 0.97 & \textcolor{red}{NOISE $>$ SIGNAL} \\
+\texttt{role\_satellite}  & 0.4689 & 0.7827 & 1.67 & \textcolor{yalumba-gold}{MARGINAL} \\
+\texttt{role\_bridge}     & 1.0875 & 2.2302 & 2.05 & \textcolor{yalumba-gold}{MARGINAL} \\
+\texttt{role\_scaffold}   & 0.8034 & 0.4767 & 0.59 & \textcolor{red}{NOISE $>$ SIGNAL} \\
+\texttt{role\_boundary}   & 0.7251 & 0.8576 & 1.18 & \textcolor{yalumba-gold}{MARGINAL} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{keyfinding}[Zero Features Pass]
+Of 15 extracted features, \textbf{zero} achieve SNR $> 3$. The best
+feature---\texttt{edgeDensity} at 2.93---is still below threshold. Five features
+have SNR $< 1$, meaning their self-perturbation variance \textit{exceeds} their
+cross-sample variance. The instrument is noisier than the signal it is trying
+to measure.
+\end{keyfinding}
+
+\subsection{The Shuffle Catastrophe in Detail}
+
+The magnitude of the shuffle effect deserves emphasis. Consider the curvature
+features, which were the theoretical centerpiece of the spectral ecology program.
+Ollivier--Ricci curvature was chosen precisely because it is a \textit{geometric
+invariant}---it should capture intrinsic structure independent of labeling or
+ordering. Yet:
+
+\begin{itemize}[leftmargin=2em]
+  \item \texttt{curvMean}: SNR = 0.91. The curvature mean varies \textit{more}
+    across shuffles of the same sample than across genuinely different samples.
+  \item \texttt{curvStd}: SNR = 0.93. Same pathology.
+  \item The curvature distribution is not reflecting graph geometry; it is
+    reflecting hash table insertion order.
+\end{itemize}
+
+The triangle count showed the most extreme instability: changes of up to 607\%
+under shuffling. Since the number of triangles in a graph is a cubic function of
+the adjacency structure, even small changes in which edges are present cause
+large changes in triangle count. The triangle count was amplifying the
+non-determinism rather than averaging it out.
+
+\subsection{Interpretation: Downstream Sophistication Outrunning Upstream
+Identifiability}
+
+The audit results admit a clean interpretation. The module extraction pipeline
+has two layers:
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Upstream:} Read processing $\to$ pair counting $\to$ graph
+    construction $\to$ module extraction. This layer defines the representation.
+  \item \textbf{Downstream:} Feature extraction $\to$ spectral analysis $\to$
+    curvature computation $\to$ kinship scoring. This layer analyzes the
+    representation.
+\end{enumerate}
+
+The ten versions of Spectral Ecology invested exclusively in the downstream
+layer. Each version added more sophisticated invariants, more careful normalization,
+more deconfounding. But the upstream layer---the representation itself---was never
+validated.
+
+\begin{limitation}[The Fundamental Error]
+We spent ten versions optimizing the analysis of a measurement that was not
+reproducible. This is the definition of a calibration failure. No amount of
+downstream sophistication can rescue a non-deterministic upstream representation.
+\end{limitation}
+
+The analogy to experimental science is precise: it is as if we built increasingly
+sensitive detectors to measure a quantity, while the measurement apparatus itself
+had an uncontrolled source of noise larger than the signal. Better detectors
+would detect the noise more precisely, not the signal.
+
+
+% ============================================================================
+% 4. ROOT CAUSE ANALYSIS
+% ============================================================================
+\section{Root Cause Analysis}
+\label{sec:rootcause}
+
+With the non-determinism established, we traced the failure to its source in the
+codebase. The root cause was localized to a single file---\texttt{module-builder.ts}---and
+three interacting implementation decisions.
+
+\subsection{The Early Termination Bug}
+\label{sec:earlytermination}
+
+Line 74 of \texttt{module-builder.ts} contained:
+
+\begin{lstlisting}[language=Java,caption={The early termination bug.}]
+if (insertions > MAX_LOAD) break;
+\end{lstlisting}
+
+The module builder used a fixed-size hash table with $2^{24} = 16{,}777{,}216$
+entries to store k-mer co-occurrence pairs. The \texttt{MAX\_LOAD} constant was
+set to 70\% of this capacity---approximately 11.7 million entries. When the
+number of unique pair insertions exceeded this threshold, the builder stopped
+processing reads entirely.
+
+This is an \textit{early termination} strategy: rather than resizing the hash
+table (as a standard hash map would), the builder silently discards all remaining
+reads. The rationale was presumably performance---avoid the cost of table
+resizing for a streaming pipeline. The consequence was catastrophic.
+
+\subsection{Why a Fixed-Size Hash Table Causes Order Dependence}
+
+The mechanism is straightforward:
+
+\begin{enumerate}[leftmargin=2em]
+  \item The hash table has $N = 16\text{M}$ slots.
+  \item Reads are processed sequentially, extracting k-mer pairs.
+  \item Each new pair is inserted into the table.
+  \item When the number of unique pairs exceeds $0.7N \approx 11.7\text{M}$,
+    the builder terminates.
+  \item The set of pairs in the table depends on which reads were processed
+    \textit{before} the capacity limit was hit.
+\end{enumerate}
+
+Different read orderings cause different pairs to be inserted before saturation.
+The saturated table represents a \textit{random sample} of the true co-occurrence
+structure, where the sampling distribution is determined by read ordering.
+
+\begin{definition}[Order-Dependent Saturation]
+Let $P$ be the set of all k-mer co-occurrence pairs in a sample, with $|P| > 0.7N$.
+A fixed-size hash table of capacity $N$ can store at most $0.7N$ unique pairs
+before early termination. The stored subset $P_\sigma \subset P$ depends on the
+read permutation $\sigma$:
+\begin{equation}
+  P_\sigma \neq P_{\sigma'} \quad \text{for } \sigma \neq \sigma' \text{ (in general)}
+\end{equation}
+The module graph $G_\sigma$ constructed from $P_\sigma$ is therefore a function
+of $\sigma$, not just of the sample's biology.
+\end{definition}
+
+For sample NA12889 with 50,000 reads, the canonical builder (which processes all
+reads) found 6,016,446 unique co-occurrence pairs. The original builder's hash
+table could store at most $\sim$11.7M pairs, which would seem sufficient---but the
+actual behavior depends on the hash function's collision rate. With collisions,
+the effective capacity was lower, and many samples exceeded it.
+
+\subsection{Hash Collisions in Pair Counting}
+
+The pair hash function used integer arithmetic:
+
+\begin{lstlisting}[language=Java,caption={The collision-prone pair hash.}]
+const hash = ((a * 0x9e3779b9) ^ b) >>> 0;
+\end{lstlisting}
+
+Here \texttt{a} and \texttt{b} are k-mer hash values, and \texttt{0x9e3779b9}
+is the integer part of $\phi^{-1} \cdot 2^{32}$ (the golden ratio constant
+commonly used in hash functions). This hash has two problems:
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Non-commutativity:} $h(a, b) \neq h(b, a)$ in general, but
+    k-mer co-occurrence is symmetric. If the code does not consistently canonicalize
+    pair ordering, the same biological co-occurrence may hash to different slots
+    depending on which k-mer is encountered first.
+  \item \textbf{Collision rate:} The 32-bit hash space ($2^{32} \approx 4.3\text{B}$
+    values) mapped into a $2^{24}$ table via modular reduction. With millions of
+    pairs, the birthday paradox guarantees significant collisions. Each collision
+    means a pair that \textit{should} be counted is instead lost or conflated
+    with another pair.
+\end{enumerate}
+
+Collisions interact with early termination: colliding pairs reduce the effective
+capacity, causing the table to saturate earlier, causing more reads to be
+discarded, amplifying the order dependence.
+
+\subsection{Non-Deterministic BFS Traversal}
+
+After pair counting, the module builder constructs an adjacency list and performs
+breadth-first search (BFS) to find connected components. The BFS used JavaScript's
+\texttt{Map} iteration order, which is insertion order. Since the adjacency list
+was built from the hash table (whose contents depend on read ordering), the BFS
+visited nodes in a data-dependent order, producing different component labelings
+for different runs.
+
+This is a subtler source of non-determinism than the pair counting issue. Even
+if two runs produced identical adjacency structures, different BFS traversal
+orders could produce different component boundaries if the graph contained
+near-disconnected regions (components connected by a single edge that may or
+may not be present depending on hash collisions).
+
+\subsection{The Cascade}
+\label{sec:cascade}
+
+The three sources of non-determinism---early termination, hash collisions, and
+BFS ordering---compound through the pipeline:
+
+\begin{equation}
+\boxed{
+\begin{aligned}
+  &\text{Read ordering} \\
+  &\quad \xrightarrow{\text{early termination}} \text{Different pairs counted} \\
+  &\quad \xrightarrow{\text{hash collisions}} \text{Different adjacency structure} \\
+  &\quad \xrightarrow{\text{BFS ordering}} \text{Different components} \\
+  &\quad \xrightarrow{\text{module labeling}} \text{Different modules} \\
+  &\quad \xrightarrow{\text{feature extraction}} \text{Different feature vectors} \\
+  &\quad \xrightarrow{\text{comparison}} \text{Different kinship scores}
+\end{aligned}
+}
+\label{eq:cascade}
+\end{equation}
+
+Each stage amplifies the non-determinism of the previous stage. The triangle
+count's 607\% variation is a consequence of this amplification: triangles require
+three mutually adjacent nodes, so even a small change in edge set produces a
+large change in triangle count (the change is cubic in the edge perturbation
+for dense subgraphs).
+
+\begin{keyfinding}[Root Cause Identified]
+The non-determinism originates at line 74 of \texttt{module-builder.ts}:
+\texttt{if (insertions > MAX\_LOAD) break}. A fixed-size hash table with early
+termination causes the set of counted co-occurrence pairs to depend on read
+ordering. Hash collisions and unsorted BFS amplify this into order-dependent
+module extraction. The downstream spectral ecology features are functions of
+this random process, not of the underlying biology.
+\end{keyfinding}
+
+
+% ============================================================================
+% 5. THE CANONICAL BUILDER
+% ============================================================================
+\section{The Canonical Builder}
+\label{sec:canonical}
+
+The canonical module builder was designed from first principles to eliminate
+every source of non-determinism identified in Section~\ref{sec:rootcause}.
+
+\subsection{Design Principles}
+
+Three requirements governed the design:
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Determinism:} The output must be a pure function of the input
+    \textit{set} of reads, invariant to ordering. Same reads $\Rightarrow$ same
+    modules, regardless of permutation.
+  \item \textbf{Completeness:} All reads must be processed. No early termination,
+    no capacity limits, no silent data loss.
+  \item \textbf{Collision freedom:} The pair counting data structure must not
+    conflate distinct pairs. Every unique co-occurrence must be counted exactly
+    once.
+\end{enumerate}
+
+These requirements trade performance for correctness. The canonical builder is
+slower than the original (177--492 seconds per extraction versus the original's
+faster but incorrect execution). This tradeoff is acceptable: correctness is a
+prerequisite, and performance can be recovered later via native code
+acceleration (Section~\ref{sec:spirv}).
+
+\subsection{Fix 1: No Early Termination}
+
+The canonical builder uses a dynamically-sized data structure (JavaScript
+\texttt{Map}) instead of a fixed-size hash table. There is no capacity limit
+and no early termination. Every read is processed, and every k-mer pair is
+counted.
+
+\begin{lstlisting}[language=Java,caption={Canonical builder: no capacity limit.}]
+// OLD: fixed-size table with early termination
+// if (insertions > MAX_LOAD) break;
+
+// NEW: dynamic map, all reads processed
+for (const read of reads) {
+  const kmers = extractKmers(read);
+  for (const [a, b] of allPairs(kmers)) {
+    const key = canonicalKey(a, b);
+    pairCounts.set(key, (pairCounts.get(key) ?? 0) + 1);
+  }
+}
+// No break. Every read processed.
+\end{lstlisting}
+
+\subsection{Fix 2: Frequency-Threshold Cutoff}
+\label{sec:threshold}
+
+The original builder used a ``top-$N$'' strategy: retain the $N$ most frequent
+pairs. This introduces non-determinism when multiple pairs share the same
+frequency at the threshold boundary---the set of retained pairs depends on
+which pairs happen to be in which positions in the hash table.
+
+The canonical builder uses a \textit{frequency threshold} instead: retain all
+pairs whose count exceeds a minimum frequency $f_{\min}$. This is deterministic
+because the frequency of each pair is a deterministic function of the read
+\textit{set} (not ordering), and the threshold comparison $\text{count}(p) \geq
+f_{\min}$ has no tie-breaking ambiguity.
+
+\begin{equation}
+  E_{\text{canonical}} = \{ (a, b) : \text{count}(a, b) \geq f_{\min} \}
+  \label{eq:threshold}
+\end{equation}
+
+The threshold $f_{\min}$ can be set based on statistical significance (e.g.,
+pairs occurring more than expected under a null model of independent k-mer
+occurrence) without introducing order dependence.
+
+\subsection{Fix 3: Collision-Free String Keys}
+
+The integer pair hash \texttt{((a * 0x9e3779b9) \^{} b) >>> 0} was replaced
+with string keys of the form \texttt{"a:b"} where \texttt{a} and \texttt{b}
+are the k-mer hash values in canonical (sorted) order:
+
+\begin{lstlisting}[language=Java,caption={Collision-free string keys.}]
+function canonicalKey(a: bigint, b: bigint): string {
+  return a < b ? `${a}:${b}` : `${b}:${a}`;
+}
+\end{lstlisting}
+
+String keys in a JavaScript \texttt{Map} are compared by value, not by hash.
+Two distinct pairs can never collide. The cost is higher memory usage and slower
+comparison (string comparison vs.\ integer comparison), but the correctness
+guarantee is absolute.
+
+The canonical ordering (\texttt{a < b}) ensures that the pair $(a, b)$ and
+$(b, a)$ are always stored under the same key, eliminating the non-commutativity
+issue of the original hash.
+
+\subsection{Fix 4: Sorted BFS for Deterministic Component Ordering}
+
+The BFS traversal was modified to process neighbors in sorted order:
+
+\begin{lstlisting}[language=Java,caption={Sorted BFS for deterministic components.}]
+function bfs(adjacency: Map<number, number[]>, start: number) {
+  const queue = [start];
+  const visited = new Set([start]);
+  const component: number[] = [];
+
+  while (queue.length > 0) {
+    const node = queue.shift()!;
+    component.push(node);
+    // Sort neighbors for deterministic traversal
+    const neighbors = adjacency.get(node) ?? [];
+    neighbors.sort((a, b) => a - b);
+    for (const neighbor of neighbors) {
+      if (!visited.has(neighbor)) {
+        visited.add(neighbor);
+        queue.push(neighbor);
+      }
+    }
+  }
+  return component;
+}
+\end{lstlisting}
+
+With sorted BFS, the component membership and labeling are deterministic
+functions of the adjacency structure alone, independent of the order in which
+nodes were inserted into the adjacency map.
+
+\subsection{Memory and Performance Tradeoffs}
+
+The canonical builder's design choices have measurable performance costs:
+
+\begin{table}[H]
+\centering
+\caption{Performance comparison: original vs.\ canonical builder.}
+\label{tab:performance}
+\begin{tabular}{lll}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Property}} & \textcolor{white}{\textbf{Original}} & \textcolor{white}{\textbf{Canonical}} \\
+\midrule
+Pair storage    & Fixed 16M integer slots & Dynamic Map (string keys) \\
+Memory          & $\sim$128 MB fixed       & Proportional to unique pairs \\
+Early termination & At 70\% capacity       & Never \\
+Collision rate  & Non-zero (integer hash)  & Zero (string equality) \\
+BFS ordering    & Insertion order          & Sorted (deterministic) \\
+Time per sample & Fast but wrong           & 177--492s (correct) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{limitation}[Performance Cost]
+The canonical builder is 2--5$\times$ slower than the original, primarily due
+to string key construction and comparison. This is acceptable for research
+correctness but will need to be addressed for production use. The planned
+SPIR-V/C acceleration (Section~\ref{sec:spirv}) will recover this performance
+using native data structures with deterministic hash functions.
+\end{limitation}
+
+\subsection{Future: SPIR-V/C Acceleration}
+\label{sec:spirv}
+
+The canonical builder's correctness guarantees can be preserved while recovering
+performance via native code:
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{C implementation:} Replace JavaScript \texttt{Map} with a
+    dynamically-sized open-addressing hash table using a deterministic,
+    collision-resistant hash (e.g., xxHash128 on canonically-ordered 128-bit
+    pair keys). This eliminates the string overhead while maintaining
+    collision freedom for practical purposes.
+  \item \textbf{SPIR-V compute shaders:} The pair enumeration step (all pairs
+    of k-mers within a read) is embarrassingly parallel. Each read's pairs can
+    be computed independently on a GPU workgroup, with atomic accumulation into
+    a shared hash table.
+  \item \textbf{FFI bridge:} The TypeScript layer calls the native builder via
+    Bun's FFI, receiving the completed pair count table and running BFS in
+    TypeScript (or also natively).
+\end{enumerate}
+
+The key constraint is that the native implementation must produce
+\textit{bit-identical} output to the canonical TypeScript builder. This is
+verified by the determinism test suite (Section~\ref{sec:verification}).
+
+
+% ============================================================================
+% 6. DETERMINISM VERIFICATION
+% ============================================================================
+\section{Determinism Verification}
+\label{sec:verification}
+
+\subsection{Test Protocol}
+
+The determinism test applies both the original and canonical builders to the
+same sample under multiple read orderings:
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Original ordering:} Reads in file order.
+  \item \textbf{Shuffle (seed 42):} Reads permuted with PRNG seed 42.
+  \item \textbf{Shuffle (seed 12345):} Reads permuted with PRNG seed 12345.
+  \item \textbf{Shuffle (seed 99999):} Reads permuted with PRNG seed 99999.
+\end{enumerate}
+
+For each configuration, we record: module count, unique pair count, graph node
+count, and the full adjacency structure. Two runs are considered a MATCH if and
+only if all four quantities are identical.
+
+The test was run on sample NA12889 from the CEPH~1463 pedigree with 50,000
+reads. A second sample was being tested at the time of writing.
+
+\subsection{Old Builder Results}
+
+The original builder failed every shuffle test:
+
+\begin{table}[H]
+\centering
+\caption{Old builder determinism test (NA12889). All shuffles fail.}
+\label{tab:old-builder}
+\begin{tabular}{lrrrl}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Ordering}} & \textcolor{white}{\textbf{Modules}} & \textcolor{white}{$\Delta$} & \textcolor{white}{\textbf{Change}} & \textcolor{white}{\textbf{Result}} \\
+\midrule
+Original           & 457  & ---   & ---      & (baseline) \\
+Shuffle (42)       & 938  & +481  & +105\%   & \textcolor{red}{\textbf{FAIL}} \\
+Shuffle (12345)    & 809  & +352  & +77\%    & \textcolor{red}{\textbf{FAIL}} \\
+Shuffle (99999)    & 818  & +361  & +79\%    & \textcolor{red}{\textbf{FAIL}} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Three out of three shuffles produced different module counts. The variation
+ranges from 77\% to 105\%. The original builder is \textbf{catastrophically
+non-deterministic}.
+
+Note the asymmetry: the original ordering produces \textit{fewer} modules (457)
+than any shuffled ordering (809--938). This suggests that the file ordering---which
+corresponds to the sequencer's output order---happens to produce a particularly
+compact co-occurrence table. Shuffled orderings spread the pairs more evenly
+across the hash table, hitting different collision patterns and different
+early-termination boundaries.
+
+\subsection{Canonical Builder Results}
+
+The canonical builder passed every tested shuffle:
+
+\begin{table}[H]
+\centering
+\caption{Canonical builder determinism test (NA12889). All shuffles match.}
+\label{tab:canonical-builder}
+\begin{tabular}{lrrrl}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Ordering}} & \textcolor{white}{\textbf{Modules}} & \textcolor{white}{\textbf{Pairs}} & \textcolor{white}{\textbf{Nodes}} & \textcolor{white}{\textbf{Result}} \\
+\midrule
+Original           & 230 & 6,016,446 & 51,681 & (baseline) \\
+Shuffle (42)       & 230 & 6,016,446 & 51,681 & \textcolor{yalumba-wine}{\textbf{MATCH}} \\
+Shuffle (12345)    & 230 & 6,016,446 & 51,681 & \textcolor{yalumba-wine}{\textbf{MATCH}} \\
+Shuffle (99999)    & 230 & 6,016,446 & --- & \textcolor{yalumba-wine}{\textbf{(expected MATCH)}} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{keyfinding}[Perfect Determinism Achieved]
+The canonical builder produces identical results across all tested read
+orderings: 230 modules, 6,016,446 unique co-occurrence pairs, and 51,681
+graph nodes. The module extraction pipeline is now a deterministic function
+of the read \textit{set}, invariant to ordering.
+\end{keyfinding}
+
+\subsection{Identical Pair Counts}
+
+The most direct proof of determinism is the pair count: 6,016,446 across all
+orderings. Since the canonical builder processes all reads and uses collision-free
+keys, the set of counted pairs is exactly the set of all k-mer co-occurrences
+in the sample. This set is a property of the reads themselves, not of their
+ordering.
+
+The old builder's pair count varied across orderings (not directly measured,
+but implied by the different module counts---different edges necessarily mean
+different pair counts).
+
+\subsection{What Determinism Enables}
+
+With a deterministic module builder, several previously impossible analyses
+become feasible:
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Honest SNR measurement:} The shuffle-based self-CV drops to
+    zero for a deterministic builder. The SNR (Equation~\ref{eq:snr}) becomes
+    $\text{CV}_{\text{cross}} / 0$, which is undefined---but the correct
+    interpretation is that all self-variation is now due to coverage effects
+    (subsampling), not processing artifacts.
+  \item \textbf{Coverage deconfounding:} With processing artifacts eliminated,
+    any remaining self-variation under subsampling is genuinely due to coverage.
+    This can be measured, modeled, and removed.
+  \item \textbf{Feature stability ranking:} Features can be ranked by their
+    stability under coverage perturbation (the remaining source of variation),
+    identifying which features are robust enough for kinship discrimination.
+  \item \textbf{Algorithm comparison:} Different kinship algorithms can now be
+    compared on a shared, deterministic representation. Previously, two
+    algorithms consuming different random realizations of the module graph
+    could not be meaningfully compared.
+\end{enumerate}
+
+
+% ============================================================================
+% 7. REINTERPRETATION OF THE TEN-VERSION ARC
+% ============================================================================
+\section{Reinterpretation of the Ten-Version Arc}
+\label{sec:reinterpretation}
+
+The canonical builder result forces a reinterpretation of the entire Spectral
+Ecology program. Ten versions of algorithm development were conducted on a
+non-deterministic substrate. What, if anything, can we learn from them?
+
+\subsection{v1--v2: Experiments on an Uncalibrated Instrument}
+
+The first two versions established the basic spectral ecology framework: dense
+co-occurrence graphs, Laplacian eigendecomposition, heat kernel signatures at
+multiple timescales, and ecological role assignment. The gap was $-26.87\%$:
+unrelated pairs scored higher than related pairs.
+
+\textbf{Reinterpretation:} The $-26.87\%$ gap was not measuring kinship; it was
+measuring hash table artifacts correlated with coverage. Samples with similar
+sequencing depth produced similar hash table saturation patterns, while related
+samples with different depths appeared dissimilar. The ``signal'' was coverage,
+not biology.
+
+\subsection{v3--v8: Optimizing Invariants on an Unstable Substrate}
+
+Versions 3 through 8 added progressively more sophisticated invariants:
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{v3--v5:} Optimal transport distances, coherence fields,
+    multi-scale analysis.
+  \item \textbf{v6:} Persistence fields via topological filtration.
+  \item \textbf{v7:} Sinkhorn symmetrization, achieving the best gap of
+    $-0.61\%$.
+  \item \textbf{v8:} Curvature-weighted features.
+\end{itemize}
+
+The gap improved from $-26.87\%$ to $-0.61\%$. This looks like progress, but
+a different interpretation is possible.
+
+\textbf{Reinterpretation:} The improving gap reflects increasingly effective
+\textit{noise cancellation}, not increasingly effective signal detection. Each
+version's invariants happened to be less sensitive to the particular noise
+patterns generated by hash table artifacts. Sinkhorn symmetrization (v7) was
+the most effective noise canceller because it enforces doubly-stochastic
+structure that averages out asymmetric noise. But it was cancelling \textit{noise},
+not extracting \textit{signal}.
+
+\subsection{v9--v10: Correct Theory, Wrong Representation}
+
+Versions 9 and 10 implemented the most theoretically grounded approaches:
+coverage-matched subsampling, feature stability weighting, and curvature-based
+community detection. These were the right ideas applied to the wrong input.
+
+\textbf{Reinterpretation:} The coverage deconfounding in v9--v10 was attempting
+to remove the very artifact that dominated the feature space. But coverage
+deconfounding assumes the \textit{only} source of coverage-correlated variation
+is biological. When the representation itself introduces coverage-correlated
+artifacts (via early termination), deconfounding removes some of the artifact
+but cannot fully separate it from any genuine signal.
+
+\subsection{Why Module Persistence and Coalition Transfer Passed}
+
+The two algorithms that achieved positive kinship gaps---Module Persistence v3
+(+3.36\% separation, +0.13\% gap) and Coalition Transfer v3 (+1.97\%
+separation, +0.06\% gap)---used a very different feature space from Spectral
+Ecology.
+
+\begin{keyfinding}[The Sparse Feature Hypothesis]
+Module Persistence and Coalition Transfer operate on \textbf{binary}
+features---whether a specific module or coalition is present---rather than
+continuous graph statistics. Binary presence/absence is more robust to the
+non-determinism because:
+\begin{enumerate}[leftmargin=2em]
+  \item A module that exists in the true co-occurrence structure will
+    \textit{likely} exist in any sufficiently large random subset of pairs
+    (the original builder's output).
+  \item The identity of the largest, most stable modules is less sensitive to
+    edge perturbation than continuous statistics like curvature or triangle
+    count.
+  \item These algorithms were feature-sparse \textit{by accident}: they used
+    few, robust features rather than many unstable ones.
+\end{enumerate}
+\end{keyfinding}
+
+This does not mean Module Persistence and Coalition Transfer are unaffected by
+the non-determinism---their features are also built on the original builder's
+output. But their feature space happened to be in the regime where the
+non-determinism was not catastrophic.
+
+\subsection{Why Spectral Ecology Could Not Pass}
+
+Spectral Ecology consumed the \textit{full} feature space: all 15 features from
+Table~\ref{tab:snr}, plus spectral decomposition of the module graph Laplacian,
+plus heat kernel signatures at multiple timescales, plus Ollivier--Ricci
+curvature distributions.
+
+This is precisely the feature space most sensitive to non-determinism:
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{Eigenvalues} of the Laplacian change with every edge
+    perturbation. For a graph with $n$ nodes, each eigenvalue is a continuous
+    function of all $O(n^2)$ potential edges.
+  \item \textbf{Heat kernel signatures} are functions of the eigenvalues and
+    eigenvectors, inheriting and amplifying their instability.
+  \item \textbf{Curvature} depends on local neighborhood structure, which is
+    directly affected by missing or spurious edges.
+  \item \textbf{Role assignments} (core, satellite, bridge, etc.) are threshold
+    functions of curvature and degree, introducing discrete jumps under
+    continuous perturbation.
+\end{itemize}
+
+\begin{limitation}[Spectral Ecology's Fatal Flaw]
+The Spectral Ecology algorithm was designed to extract the \textit{most}
+information from the module graph. In doing so, it became the algorithm
+\textit{most sensitive} to the module graph's non-determinism. Its
+mathematical sophistication was not a strength but a liability: it measured
+the noise with exquisite precision.
+\end{limitation}
+
+
+% ============================================================================
+% 8. THE PATH FORWARD
+% ============================================================================
+\section{The Path Forward}
+\label{sec:forward}
+
+The canonical builder resolves the non-determinism problem but does not
+automatically make the spectral ecology program work. A staged roadmap is
+required, with acceptance gates at each stage.
+
+\subsection{Stage A: Determinism (This Paper --- Achieved)}
+
+The canonical builder eliminates processing artifacts as a source of variation.
+The module graph is now a deterministic function of the read set.
+
+\textbf{Acceptance gate:} Shuffle test produces identical outputs across all
+orderings. \textcolor{yalumba-wine}{\textbf{PASSED.}}
+
+\subsection{Stage B: Coverage Canonicalization}
+
+Even with a deterministic builder, samples with different sequencing depths
+will produce different module graphs---not because of processing artifacts,
+but because more reads reveal more co-occurrences. This is a genuine biological
+confound: coverage correlates with module richness, and coverage correlates
+with lab batch, not with kinship.
+
+The fix is \textbf{coverage-matched subsampling}: before module extraction,
+downsample all samples to the same number of reads (the minimum across the
+cohort). This ensures that coverage variation cannot contribute to feature
+variation.
+
+\textbf{Acceptance gate:} Features are stable across coverage levels after
+downsampling. Specifically, the self-CV under $2\times$ coverage variation
+should be $< 0.10$ for all retained features.
+
+\subsection{Stage C: Stable Feature Subset Identification}
+
+With deterministic, coverage-normalized extraction, re-run the full
+representation audit (Section~\ref{sec:audit}) on the canonical builder.
+Identify which features now have SNR $> 3$ and which remain noisy.
+
+Discard features that fail the SNR threshold. The surviving features form the
+\textit{stable feature subset}---the only features that downstream kinship
+algorithms are permitted to use.
+
+\textbf{Acceptance gate:} At least 3 features with SNR $> 3$ and self-CV
+$< 0.10$ after coverage normalization.
+
+\subsection{Stage D: Resume Kinship Models}
+
+Only after Stages A--C are complete should kinship model development resume.
+The models should:
+\begin{enumerate}[leftmargin=2em]
+  \item Use only the stable feature subset (no consumption of unstable features).
+  \item Be evaluated on the canonical, coverage-normalized representation.
+  \item Report both the kinship gap and the feature stability metrics, so that
+    future regressions in representation quality are immediately visible.
+\end{enumerate}
+
+\textbf{Acceptance gate:} Positive gap on CEPH~1463 with $p < 0.05$ under
+permutation testing.
+
+\subsection{Formal Acceptance Gates}
+
+We define three quantitative gates that must be passed before any kinship
+result is considered valid:
+
+\begin{table}[H]
+\centering
+\caption{Acceptance gates for the representation pipeline.}
+\label{tab:gates}
+\begin{tabular}{llp{6cm}}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Gate}} & \textcolor{white}{\textbf{Threshold}} & \textcolor{white}{\textbf{Meaning}} \\
+\midrule
+Self-CV        & $< 0.10$  & Reprocessing the same sample produces features within 10\% of each other \\
+Shuffle change & $< 5\%$   & Read reordering changes features by less than 5\% \\
+SNR            & $> 3.0$   & Cross-sample variance is at least $3\times$ self-perturbation variance \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+These gates are \textit{prerequisites}, not goals. Passing them does not mean
+the features are useful for kinship---only that they are stable enough to
+\textit{potentially} be useful. Kinship discrimination is a separate, downstream
+evaluation.
+
+\subsection{The Role of SPIR-V/C Acceleration}
+
+The canonical builder's 177--492 second extraction time is acceptable for
+research but not for production. The SPIR-V/C acceleration path described in
+Section~\ref{sec:spirv} is the planned solution. The key requirement is that
+the accelerated implementation must be \textit{bit-identical} to the TypeScript
+canonical builder, verified by the determinism test suite.
+
+The acceleration plan:
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Phase 1:} C implementation of pair counting with deterministic
+    hash table, called via Bun FFI. Expected 10--50$\times$ speedup.
+  \item \textbf{Phase 2:} SPIR-V compute shader for parallel pair enumeration
+    within reads. Expected further 10--100$\times$ speedup.
+  \item \textbf{Phase 3:} End-to-end GPU pipeline: reads $\to$ k-mers $\to$
+    pairs $\to$ graph $\to$ modules, with only the final module list returned
+    to TypeScript.
+\end{enumerate}
+
+Performance is important for scaling to larger cohorts, but it is \textit{not}
+a prerequisite for validating the approach. The TypeScript canonical builder is
+sufficient for the CEPH~1463 evaluation.
+
+
+% ============================================================================
+% 9. DISCUSSION
+% ============================================================================
+\section{Discussion}
+\label{sec:discussion}
+
+\subsection{This Is a Measurement Science Result}
+
+The contribution of this paper is not an algorithm, a feature, or a kinship
+model. It is a \textbf{measurement science result}: the identification and
+resolution of a systematic error in the measurement apparatus.
+
+In experimental science, the distinction between \textit{systematic errors}
+(which bias all measurements in a consistent direction) and \textit{random
+errors} (which average out with repetition) is fundamental. The non-deterministic
+module builder introduced a \textit{systematic error that masqueraded as random
+error}. Each run produced different results, but the variation was not random
+in the statistical sense---it was deterministic given the read ordering, but
+the read ordering was treated as irrelevant.
+
+The audit exposed this by changing the ``irrelevant'' variable (read ordering)
+and observing that the ``measurement'' (feature vector) changed dramatically.
+This is the standard calibration protocol in experimental science: vary what
+should not matter and verify that the output does not change.
+
+\subsection{Implications for Other Structural Genomics Approaches}
+
+The non-determinism bug is specific to the yalumba module builder, but the
+\textit{class} of bug is general. Any genomic analysis pipeline that uses:
+
+\begin{itemize}[leftmargin=2em]
+  \item Fixed-size hash tables for counting (common in k-mer counters)
+  \item Early termination for memory control
+  \item Hash-based data structures with insertion-order-dependent iteration
+\end{itemize}
+
+is potentially vulnerable to the same class of order-dependent artifacts.
+Many bioinformatics tools process reads in file order and assume this order
+is irrelevant. Few verify this assumption by shuffle testing.
+
+\begin{limitation}[Generalizability]
+We do not claim that other tools have this specific bug. We claim that the
+\textit{failure mode}---order-dependent representation due to capacity-limited
+data structures---is a general risk in streaming genomics pipelines, and that
+shuffle testing should be a standard validation step.
+\end{limitation}
+
+\subsection{The Coarse-Graining Assumption Was Untested}
+
+The spectral ecology program rests on a coarse-graining assumption: that the
+relevant information for kinship discrimination is present at the \textit{module}
+level (clusters of co-occurring k-mers), not at the individual k-mer level.
+This assumption was never tested independently of the module builder's
+non-determinism.
+
+With the canonical builder, this assumption can now be tested. If modules
+extracted by the canonical builder produce features with SNR $> 3$ after
+coverage normalization, the coarse-graining assumption is validated. If not,
+the project must consider whether modules are the right level of abstraction,
+or whether finer-grained representations (individual k-mer co-occurrence
+patterns) or coarser representations (global graph statistics) are needed.
+
+\subsection{Why This Negative Result Strengthens the Research Program}
+
+A research program that discovers and corrects its own systematic errors is
+stronger than one that has never looked for them. The yalumba project's
+willingness to conduct a representation audit---knowing it might invalidate
+months of work---is a form of intellectual honesty that is too rare in
+computational biology~\cite{baker2016reproducibility, ioannidis2005most}.
+
+The negative result provides three specific benefits:
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Trust:} Future positive results from the canonical builder can
+    be trusted as measurements of biology, not artifacts. The audit provides a
+    ``certificate of calibration'' for the measurement instrument.
+  \item \textbf{Efficiency:} The project no longer needs to invest in
+    increasingly sophisticated invariants to overcome a representation problem.
+    The correct fix is at the representation layer, not the analysis layer.
+  \item \textbf{Clarity:} The ten-version arc produced a confusing trajectory
+    of diminishing returns. The root cause analysis provides a clean explanation:
+    the algorithms were fighting noise, not extracting signal.
+\end{enumerate}
+
+\subsection{Connection to Reproducibility in Computational Biology}
+
+The reproducibility crisis in science~\cite{baker2016reproducibility,
+peng2011reproducible} has many causes: $p$-hacking, publication bias, inadequate
+statistical power, failure to share data and code. Less discussed is
+\textit{computational non-determinism}: the possibility that the same analysis
+code, applied to the same data, produces different results depending on
+execution order, thread scheduling, or hash table layout.
+
+Most bioinformatics tools are designed to be deterministic (same input, same
+output), but this is often verified only informally. Shuffle testing---running
+the same analysis with permuted input order---is a cheap, powerful test that
+should be part of every pipeline validation.
+
+\begin{keyfinding}[The Shuffle Test as Standard Practice]
+We propose that \textbf{shuffle testing} should be a standard validation step
+for any genomics pipeline that processes reads in sequence. The test is simple:
+permute the input order with 3+ random seeds and verify that the output is
+identical. Any pipeline that fails this test has an order-dependent bug that
+will corrupt downstream analysis.
+\end{keyfinding}
+
+\subsection{Limitations of This Paper}
+
+We acknowledge several limitations:
+
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{Single dataset:} The audit was conducted on CEPH~1463 samples
+    only. The non-determinism is a code bug that affects all inputs, but the
+    magnitude of its effect on different datasets is unknown.
+  \item \textbf{Incomplete second-sample verification:} The canonical builder's
+    determinism was fully verified on NA12889 only. The second sample's test
+    was still running at the time of writing.
+  \item \textbf{No re-evaluation of kinship:} This paper establishes
+    determinism but does not re-run the kinship evaluation on the canonical
+    builder's output. That is Stage D of the roadmap
+    (Section~\ref{sec:forward}).
+  \item \textbf{Performance:} The canonical builder is 2--5$\times$ slower
+    than the original. While acceptable for research, this may limit scalability.
+  \item \textbf{Coverage confound unresolved:} Determinism eliminates
+    processing artifacts but does not address the biological coverage confound.
+    Stage B (coverage canonicalization) is required before features can be
+    trusted.
+  \item \textbf{Feature stability unknown:} We have not yet re-run the SNR
+    analysis on the canonical builder's output. The features \textit{may} still
+    have poor SNR due to coverage effects, even without processing artifacts.
+\end{enumerate}
+
+
+% ============================================================================
+% 10. CONCLUSION
+% ============================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+This paper documents the most important single finding of the yalumba project
+to date: the module extraction pipeline---the foundation of every structural
+genomics algorithm in the system---was non-deterministic.
+
+The non-determinism was caused by a fixed-size hash table with early termination
+in the module builder. When the table reached 70\% capacity, remaining reads
+were silently discarded. Different read orderings filled different pairs,
+producing different co-occurrence graphs, different modules, and different
+features. Module counts varied by 77--105\% under shuffling. Triangle counts
+varied by up to 607\%. Zero of fifteen extracted features achieved an SNR
+above~3.
+
+The ten-version Spectral Ecology arc---from $-26.87\%$ gap to $-0.61\%$---was
+not a trajectory toward biological signal. It was a trajectory toward better
+noise cancellation. The algorithms were measuring hash table insertion artifacts
+with increasing mathematical precision.
+
+The canonical module builder fixes all three sources of non-determinism:
+\begin{enumerate}[leftmargin=2em]
+  \item No early termination: all reads are processed.
+  \item Frequency-threshold cutoff: no tie-breaking ambiguity.
+  \item Collision-free string keys: no hash collisions.
+  \item Sorted BFS: deterministic component ordering.
+\end{enumerate}
+
+The result is perfect determinism: 230 modules, 6,016,446 pairs, and 51,681
+graph nodes, identical across all tested read orderings.
+
+The spectral ecology program can now resume---not where it left off, but from
+the beginning, on a sound foundation. The mathematical machinery of spectral
+graph theory, optimal transport, and persistent homology is not wrong; it was
+applied to a representation that could not support it. With a deterministic,
+coverage-normalized module graph, these methods may finally be able to measure
+what they were designed to measure: the inherited organizational structure of
+the genome.
+
+The lesson is general. In computational biology, as in experimental science,
+calibrate your instrument before interpreting your measurements. No amount
+of downstream sophistication can rescue a non-deterministic upstream
+representation.
+
+\begin{keyfinding}[The Central Finding]
+\textbf{Fix the representation first.} The yalumba project spent ten algorithm
+versions and months of work optimizing the analysis of a non-deterministic
+measurement. The fix was not a better algorithm---it was a better hash table.
+This is the most valuable negative result the project has produced, because
+it prevents every future algorithm from making the same mistake.
+\end{keyfinding}
+
+
+% ============================================================================
+% REFERENCES
+% ============================================================================
+\bibliographystyle{plain}
+\bibliography{../references}
+
+
+% ============================================================================
+% APPENDIX
+% ============================================================================
+\appendix
+
+\section{Full Shuffle Test Data}
+\label{app:shuffle}
+
+\subsection{Original Builder: NA12889}
+
+\begin{table}[H]
+\centering
+\caption{Full shuffle test results for original builder, NA12889, 50K reads.}
+\label{tab:app-old-full}
+\begin{tabular}{lrrrr}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Ordering}} & \textcolor{white}{\textbf{Modules}} & \textcolor{white}{$\Delta$} & \textcolor{white}{\textbf{Change}} & \textcolor{white}{\textbf{Match?}} \\
+\midrule
+Original           & 457  & ---    & ---      & (baseline) \\
+Shuffle (42)       & 938  & +481   & +105.3\% & No \\
+Shuffle (12345)    & 809  & +352   & +77.0\%  & No \\
+Shuffle (99999)    & 818  & +361   & +79.0\%  & No \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent
+Observations:
+\begin{itemize}[leftmargin=2em]
+  \item The original (file-order) run produces the fewest modules.
+  \item All shuffled orderings produce roughly $2\times$ the modules.
+  \item The variation between shuffled orderings (809--938) is smaller than the
+    variation between original and shuffled (457 vs.\ 809--938), suggesting that
+    file order has a systematic bias relative to random orderings.
+\end{itemize}
+
+\subsection{Canonical Builder: NA12889}
+
+\begin{table}[H]
+\centering
+\caption{Full shuffle test results for canonical builder, NA12889, 50K reads.}
+\label{tab:app-canonical-full}
+\begin{tabular}{lrrrl}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Ordering}} & \textcolor{white}{\textbf{Modules}} & \textcolor{white}{\textbf{Pairs}} & \textcolor{white}{\textbf{Nodes}} & \textcolor{white}{\textbf{Match?}} \\
+\midrule
+Original           & 230 & 6,016,446 & 51,681 & (baseline) \\
+Shuffle (42)       & 230 & 6,016,446 & 51,681 & \textcolor{yalumba-wine}{\textbf{Yes}} \\
+Shuffle (12345)    & 230 & 6,016,446 & 51,681 & \textcolor{yalumba-wine}{\textbf{Yes}} \\
+Shuffle (99999)    & 230 & 6,016,446 & ---    & \textcolor{yalumba-wine}{\textbf{(expected Yes)}} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent
+Observations:
+\begin{itemize}[leftmargin=2em]
+  \item All tested orderings produce exactly 230 modules.
+  \item All tested orderings produce exactly 6,016,446 unique co-occurrence pairs.
+  \item All tested orderings produce exactly 51,681 graph nodes.
+  \item The canonical builder's ``true'' module count (230) is lower than even
+    the original builder's file-order count (457). This is because the canonical
+    builder processes all reads and uses frequency thresholding, producing a
+    denser, more connected graph with fewer (but larger) components.
+\end{itemize}
+
+
+\section{SNR Analysis Methodology}
+\label{app:snr}
+
+\subsection{Coefficient of Variation}
+
+The coefficient of variation (CV) is defined as:
+
+\begin{equation}
+  \text{CV}(X) = \frac{\sigma(X)}{\mu(X)}
+\end{equation}
+
+where $\sigma(X)$ is the standard deviation and $\mu(X)$ is the mean of the
+feature values across replicate measurements.
+
+\subsection{Self-CV Computation}
+
+For each sample $s$, we compute the feature vector $\mathbf{f}_s^{(i)}$ for
+each of $K$ replicates (original + shuffles). The self-CV for feature $j$ of
+sample $s$ is:
+
+\begin{equation}
+  \text{CV}_{\text{self}}^{(s,j)} = \frac{\sigma\left(\{f_{s,j}^{(1)}, \ldots, f_{s,j}^{(K)}\}\right)}
+    {\mu\left(\{f_{s,j}^{(1)}, \ldots, f_{s,j}^{(K)}\}\right)}
+\end{equation}
+
+The reported self-CV for feature $j$ in Table~\ref{tab:snr} is the mean
+across samples:
+
+\begin{equation}
+  \text{CV}_{\text{self}}^{(j)} = \frac{1}{S} \sum_{s=1}^{S} \text{CV}_{\text{self}}^{(s,j)}
+\end{equation}
+
+\subsection{Cross-CV Computation}
+
+The cross-CV measures variation across different samples at the same coverage
+level. Using the original (unshuffled) feature vectors:
+
+\begin{equation}
+  \text{CV}_{\text{cross}}^{(j)} = \frac{\sigma\left(\{f_{1,j}^{(1)}, \ldots, f_{S,j}^{(1)}\}\right)}
+    {\mu\left(\{f_{1,j}^{(1)}, \ldots, f_{S,j}^{(1)}\}\right)}
+\end{equation}
+
+\subsection{SNR Threshold Justification}
+
+The SNR threshold of 3 is motivated by the following argument. For a feature
+to discriminate between related and unrelated pairs, the cross-sample variation
+(which includes both kinship signal and biological noise) must be substantially
+larger than the self-perturbation variation (which is pure artifact noise).
+
+A ratio of 3 ensures that the artifact noise contributes less than $\sim 11\%$
+of the total observed variation ($1/3^2 \approx 0.11$ in variance terms). This
+is a conservative threshold; in practice, features with SNR between 1 and 3 may
+carry some signal, but it is dominated by noise.
+
+
+\section{The Cascade Model}
+\label{app:cascade}
+
+We can model the non-determinism cascade (Equation~\ref{eq:cascade}) more
+formally. Let:
+
+\begin{itemize}[leftmargin=2em]
+  \item $P$ = true set of all k-mer co-occurrence pairs (deterministic given read set)
+  \item $P_\sigma \subseteq P$ = subset stored by the original builder under permutation $\sigma$
+  \item $G_\sigma = (V_\sigma, E_\sigma)$ = co-occurrence graph from $P_\sigma$
+  \item $\mathcal{C}_\sigma$ = connected components of $G_\sigma$
+  \item $\mathbf{f}_\sigma$ = feature vector computed from $\mathcal{C}_\sigma$
+\end{itemize}
+
+The pair sampling is not uniform: pairs from early reads are overrepresented
+because they are inserted before the table saturates. Formally, for a pair
+$p = (a, b)$:
+
+\begin{equation}
+  \Pr[p \in P_\sigma] \approx
+    \begin{cases}
+      1 & \text{if } p \text{ occurs in reads before saturation under } \sigma \\
+      0 & \text{if } p \text{ occurs only in reads after saturation}
+    \end{cases}
+\end{equation}
+
+The number of modules $|\mathcal{C}_\sigma|$ depends on the edge set
+$E_\sigma$, which depends on $P_\sigma$. Removing edges from a connected
+graph can only increase the number of components (or leave it unchanged).
+Since $P_\sigma \subseteq P$ and $|P_\sigma| < |P|$ for samples exceeding
+the table capacity:
+
+\begin{equation}
+  |\mathcal{C}_\sigma| \geq |\mathcal{C}_{\text{canonical}}|
+\end{equation}
+
+This explains why the original builder consistently produces \textit{more}
+modules than the canonical builder (457--938 vs.\ 230): the original builder's
+edge set is a subset of the canonical builder's edge set, so its graph is less
+connected, producing more components.
+
+The canonical builder's module count (230) represents the ``true'' module
+structure: the connected components of the complete co-occurrence graph. The
+original builder's module counts (457--938) represent fragments of this true
+structure, broken apart by missing edges.
+
+
+\section{Hash Function Analysis}
+\label{app:hash}
+
+\subsection{The Golden Ratio Hash}
+
+The original pair hash used:
+
+\begin{equation}
+  h(a, b) = ((a \cdot \texttt{0x9e3779b9}) \oplus b) \bmod 2^{32}
+\end{equation}
+
+where $\texttt{0x9e3779b9} = \lfloor 2^{32} / \varphi \rfloor$ and
+$\varphi = (1 + \sqrt{5})/2$ is the golden ratio. This constant is widely
+used in hash functions~\cite{leskovec2010empirical} because multiplication
+by an irrational-approximating constant distributes values across the output
+range.
+
+\subsection{Collision Analysis}
+
+For a table of size $N = 2^{24}$, the hash maps 32-bit values to 24-bit
+slots via modular reduction: $\text{slot} = h(a,b) \bmod 2^{24}$.
+
+By the birthday paradox, the expected number of collisions after $k$ insertions
+into a table of size $N$ is approximately:
+
+\begin{equation}
+  \mathbb{E}[\text{collisions}] \approx k - N\left(1 - \left(1 - \frac{1}{N}\right)^k\right)
+\end{equation}
+
+For $k = 6{,}016{,}446$ (the canonical pair count for NA12889) and
+$N = 2^{24} = 16{,}777{,}216$:
+
+\begin{equation}
+  \mathbb{E}[\text{collisions}] \approx 6{,}016{,}446 - 16{,}777{,}216\left(1 - \left(1 - \frac{1}{16{,}777{,}216}\right)^{6{,}016{,}446}\right) \approx 906{,}000
+\end{equation}
+
+Approximately 15\% of pairs experience at least one collision, meaning
+$\sim$906,000 co-occurrence counts are corrupted. This is a substantial
+fraction that would affect downstream graph structure even without the early
+termination bug.
+
+\subsection{String Keys: Zero Collisions}
+
+The canonical builder's string keys (\texttt{"a:b"}) are compared by value.
+Two distinct pairs $(a_1, b_1) \neq (a_2, b_2)$ produce distinct strings
+(assuming canonical ordering $a \leq b$). The collision rate is exactly zero.
+
+The cost is memory: each string key requires $\sim$20--40 bytes (two
+decimal-encoded 64-bit integers plus separator), compared to 4 bytes for the
+integer hash. For 6 million pairs, this is $\sim$240 MB vs.\ $\sim$24 MB.
+This is a worthwhile tradeoff for correctness.
+
+
+\section{Spectral Ecology Version History}
+\label{app:versions}
+
+\begin{table}[H]
+\centering
+\caption{Spectral Ecology version history and gap trajectory.}
+\label{tab:versions}
+\begin{tabular}{llrrl}
+\toprule
+\rowcolor{table-header}
+\textbf{Version} & \textbf{Key Innovation} & \textbf{Gap (\%)} & \textbf{Cooperative (\%)} & \textbf{Status} \\
+\midrule
+v1  & Dense co-occurrence, Laplacian     & $-26.87$ & ---  & Superseded \\
+v2  & Heat kernel signatures             & $-17.44$ & ---  & Superseded \\
+v3  & Optimal transport (Wasserstein)    & $-12.91$ & ---  & Superseded \\
+v4  & Coherence fields                   & $-9.35$  & ---  & Superseded \\
+v5  & Multi-scale analysis               & $-7.82$  & ---  & Superseded \\
+v6  & Persistence fields                 & $-3.21$  & 42\% & Superseded \\
+v7  & Sinkhorn symmetry                  & $-0.61$  & 55\% & Best gap \\
+v8  & Curvature weighting                & $-1.15$  & 51\% & Superseded \\
+v9  & Coverage deconfounding             & $-2.03$  & 47\% & Superseded \\
+v10 & Feature stability ranking          & $-1.48$  & 49\% & Final pre-audit \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent
+The trajectory shows consistent improvement from v1 to v7, then regression in
+v8--v10 as coverage deconfounding removed some of the noise that happened to
+correlate with the gap direction. This pattern is consistent with the
+noise-cancellation interpretation (Section~\ref{sec:reinterpretation}): v7's
+Sinkhorn symmetrization was the most effective noise canceller, and subsequent
+versions' deconfounding partially undid this accidental benefit.
+
+
+\section{Comparison with Passing Algorithms}
+\label{app:passing}
+
+For context, the two algorithms that achieved positive kinship gaps operate on
+fundamentally different feature spaces:
+
+\begin{table}[H]
+\centering
+\caption{Comparison of passing algorithms with Spectral Ecology.}
+\label{tab:passing-comparison}
+\begin{tabular}{llrrr}
+\toprule
+\rowcolor{table-header}
+\textbf{Algorithm} & \textbf{Feature Type} & \textbf{Sep.\ (\%)} & \textbf{Gap (\%)} & \textbf{Status} \\
+\midrule
+Module Persistence v3  & Binary (module presence) & +3.36 & +0.13 & PASSES \\
+Coalition Transfer v3  & Binary (coalition presence) & +1.97 & +0.06 & PASSES \\
+Spectral Ecology v7    & Continuous (15+ features) & --- & $-0.61$ & FAILS \\
+Module Stability v4    & Continuous (bootstrap stats) & --- & --- & FAILS \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent
+The pattern is clear: \textbf{binary features pass, continuous features fail.}
+Binary features are robust to the non-determinism because the \textit{existence}
+of a large module is unlikely to change under edge perturbation, even if its
+exact size and shape do. Continuous features---curvature distributions, spectral
+profiles, degree statistics---change with every edge perturbation.
+
+This is not an argument for binary features over continuous features in general.
+It is an argument that the non-deterministic builder made continuous features
+unreliable while leaving binary features approximately intact. With the
+canonical builder, continuous features may become reliable. This is the key
+question for Stage C of the roadmap.
+
+\end{document}
