@@ -1,28 +1,19 @@
 /**
- * Spectral Ecology v8 — Holonomy Curvature Invariants
+ * Spectral Ecology v8 — Holonomy Curvature with Self-Baseline
  *
- * Key shift from v7: move from FIELD SIMILARITY to PARALLEL TRANSPORT INVARIANTS.
+ * Three fixes from v8-alpha:
+ * 1. TOP-K transport (k=5) — sharp, not diffuse Gaussian
+ * 2. SELF-CURVATURE BASELINE — compare A-via-B to A-via-A
+ *    score = similarity(cross-curvature, self-curvature)
+ * 3. EMD distribution comparison — captures distribution shift
  *
- * Instead of comparing coherence field Φ directly, compare how Φ
- * changes along closed loops in the module graph. This is the
- * gauge-theoretic approach: curvature = holonomy around loops.
- *
- * For each pair (A, B):
- *   1. Find all triangles in A's module graph
- *   2. Transport A's patch tensors around each triangle via B-space
- *   3. Measure the "holonomy" — how much the tensor changes
- *   4. Build a curvature distribution over all triangles
- *   5. Compare A's self-curvature to the A-via-B curvature
- *
- * Hypothesis: related individuals preserve local organizational
- * constraints, producing LOW curvature (flat connection). Unrelated
- * individuals have inconsistent mappings, producing HIGH curvature.
+ * Combined with cooperative stability from v7 (the best discriminator).
  *
  * Scoring:
- *   0.45 cooperative stability (from v7 — best discriminator)
- *   0.30 holonomy-based curvature similarity
+ *   0.40 cooperative stability (from v7 persistence field)
+ *   0.35 holonomy self-baseline similarity
  *   0.15 Sinkhorn symmetry
- *   0.10 distortion
+ *   0.10 (1 - distortion)
  */
 
 import type { SymbioAlgorithm, SampleReads, ComparisonScore } from "../types.js";
@@ -35,8 +26,9 @@ import {
   solvePersistenceField,
   findTriangles,
   computeHolonomy,
+  compareCurvatureDistributions,
 } from "@yalumba/ecology";
-import type { SamplePatches } from "@yalumba/ecology";
+import type { SamplePatches, HolonomyResult } from "@yalumba/ecology";
 import type { ModuleExtractionOptions } from "@yalumba/modules";
 
 const EXTRACT_OPTS: ModuleExtractionOptions = {
@@ -49,26 +41,26 @@ const EXTRACT_OPTS: ModuleExtractionOptions = {
 interface PreparedContext {
   samples: Map<string, SamplePatches>;
   triangles: Map<string, ReturnType<typeof findTriangles>>;
+  selfHolonomy: Map<string, HolonomyResult>;
 }
 
 export const spectralEcologyV8: SymbioAlgorithm = {
   name: "Spectral ecology v8",
   version: 8,
-  description: "Holonomy curvature invariants — gauge-theoretic parallel transport around module graph loops",
+  description: "Holonomy curvature with self-baseline — top-k transport + EMD distribution comparison",
   family: "ecological-succession",
   maxReadsPerSample: 50_000,
 
   prepare(samples): PreparedContext {
     const t0 = performance.now();
-    console.log(`    [spectral-ecology-v8] Building ecological patches + finding triangles...`);
+    console.log(`    [v8] Building patches + triangles + self-holonomy...`);
 
     const prepared = new Map<string, SamplePatches>();
     const triMap = new Map<string, ReturnType<typeof findTriangles>>();
+    const selfHol = new Map<string, HolonomyResult>();
 
     for (const sample of samples) {
       const st = performance.now();
-      console.log(`      ${sample.id}:`);
-
       const graph = buildInteractionGraph(sample.reads, EXTRACT_OPTS);
       const laplacian = normalizedLaplacian(graph.adjacency);
       const eigen = eigenDecomposition(laplacian);
@@ -76,15 +68,19 @@ export const spectralEcologyV8: SymbioAlgorithm = {
       const patches = extractPatches(sample.id, graph, roles);
       const triangles = findTriangles(patches);
 
+      // Self-holonomy: map A through A (baseline curvature)
+      const selfResult = computeHolonomy(patches, patches, triangles);
+
       const elapsed = ((performance.now() - st) / 1000).toFixed(1);
-      console.log(`        ${graph.n} modules, ${patches.n} patches, ${triangles.length} triangles (${elapsed}s)`);
+      console.log(`      ${sample.id}: ${patches.n} modules, ${triangles.length} tri, self-κ=${selfResult.meanCurvature.toFixed(3)} (${elapsed}s)`);
 
       prepared.set(sample.id, patches);
       triMap.set(sample.id, triangles);
+      selfHol.set(sample.id, selfResult);
     }
 
-    console.log(`    [spectral-ecology-v8] Total prep: ${((performance.now() - t0) / 1000).toFixed(1)}s`);
-    return { samples: prepared, triangles: triMap };
+    console.log(`    [v8] Total prep: ${((performance.now() - t0) / 1000).toFixed(1)}s`);
+    return { samples: prepared, triangles: triMap, selfHolonomy: selfHol };
   },
 
   compare(a: SampleReads, b: SampleReads, context: unknown): ComparisonScore {
@@ -92,42 +88,35 @@ export const spectralEcologyV8: SymbioAlgorithm = {
     const pA = ctx.samples.get(a.id)!;
     const pB = ctx.samples.get(b.id)!;
     const triA = ctx.triangles.get(a.id)!;
+    const selfA = ctx.selfHolonomy.get(a.id)!;
 
-    // ── 1. Cooperative stability + Sinkhorn + distortion from v7 ──
+    // ── 1. Cooperative stability + symmetry + distortion from v7 ──
     const seed = hashPair(a.id, b.id);
-    const v7Result = solvePersistenceField(pA, pB, seed);
+    const v7 = solvePersistenceField(pA, pB, seed);
 
-    // ── 2. Holonomy curvature ──
-    // Compute curvature distribution for A's triangles mapped through B
+    // ── 2. Cross-holonomy: A's triangles mapped through B ──
     let holonomyScore = 0;
-    if (triA.length >= 3) {
-      const holonomy = computeHolonomy(pA, pB, triA);
+    let crossMean = 0;
+    if (triA.length >= 3 && selfA.triangleCount >= 3) {
+      const crossHol = computeHolonomy(pA, pB, triA);
+      crossMean = crossHol.meanCurvature;
 
-      // Low mean curvature = flat connection = structure-preserving mapping
-      // Normalize by a reference scale (median triangle curvature)
-      const refScale = Math.max(holonomy.p50, 0.01);
-      const normalizedMean = holonomy.meanCurvature / refScale;
-
-      // Score: exp(-normalized_curvature) — high when curvature is low
-      holonomyScore = Math.exp(-normalizedMean * 0.5);
-
-      // Also consider curvature concentration (low P90/P50 ratio = concentrated)
-      const concentration = holonomy.p50 > 0.01
-        ? Math.exp(-holonomy.p90 / holonomy.p50)
-        : 0;
-      holonomyScore = 0.6 * holonomyScore + 0.4 * concentration;
+      // Self-baseline comparison: how similar is A-via-B to A-via-A?
+      // Related: A-via-B ≈ A-via-A (inherited structure preserves geometry)
+      // Unrelated: A-via-B ≠ A-via-A (random structure disrupts geometry)
+      holonomyScore = compareCurvatureDistributions(selfA, crossHol);
     }
 
     // ── 3. Composite score ──
     const score =
-      0.45 * v7Result.cooperativeStability +
-      0.30 * holonomyScore +
-      0.15 * v7Result.symmetryAgreement +
-      0.10 * (1 - v7Result.distortion);
+      0.40 * v7.cooperativeStability +
+      0.35 * holonomyScore +
+      0.15 * v7.symmetryAgreement +
+      0.10 * (1 - v7.distortion);
 
     return {
       score,
-      detail: `S=${v7Result.cooperativeStability.toFixed(4)} H=${holonomyScore.toFixed(4)} SYM=${v7Result.symmetryAgreement.toFixed(4)} D=${v7Result.distortion.toFixed(4)} tri=${triA.length}`,
+      detail: `S=${v7.cooperativeStability.toFixed(4)} H=${holonomyScore.toFixed(4)} selfκ=${selfA.meanCurvature.toFixed(3)} crossκ=${crossMean.toFixed(3)} SYM=${v7.symmetryAgreement.toFixed(4)} tri=${triA.length}`,
     };
   },
 };

@@ -1,30 +1,28 @@
 /**
- * Holonomy-based curvature invariants for ecosystem comparison.
+ * Holonomy-based curvature invariants — v2.
  *
- * The key insight from gauge theory: curvature is detected by
- * transporting a quantity around a closed loop and measuring
- * how much it changes. In our context:
+ * Three fixes from v1:
  *
- * 1. Find minimal cycles (triangles) in the module graph
- * 2. For each triangle (i,j,k), compute the "holonomy":
- *    transport the patch tensor from i→j→k→i using the
- *    coherence field, measure how far the result is from
- *    the original tensor
- * 3. The distribution of holonomies over all triangles
- *    characterizes the LOCAL GEOMETRIC CONSISTENCY of the
- *    ecosystem — how "flat" or "curved" the field is
+ * 1. TOP-K TRANSPORT: Use only the 5 nearest target modules for
+ *    mapping (not full Gaussian kernel). Sharp transport produces
+ *    discriminative holonomy; diffuse transport washes out signal.
  *
- * Related individuals should have similar curvature distributions
- * because they inherited the same local organizational constraints.
- * Unrelated individuals share modules by chance but their
- * arrangement constraints are independently random → different curvature.
+ * 2. SELF-CURVATURE BASELINE: Compute holonomy for A's triangles
+ *    mapped through A itself (A-via-A). Then compare:
+ *      score = similarity(A-via-B curvature, A-via-A curvature)
+ *    Related pairs: A-via-B ≈ A-via-A (inherited structure preserves local geometry)
+ *    Unrelated: A-via-B ≠ A-via-A (random structure disrupts geometry)
+ *    This deconfounds graph density (bigger graphs have more triangles
+ *    but self-curvature normalizes for that).
  *
- * This is genuinely gauge-theoretic: we measure the connection
- * (how the field rotates along edges) rather than the field values.
+ * 3. EARTH MOVER'S DISTANCE for distribution comparison.
+ *    EMD captures shift in the curvature distribution, not just overlap.
  */
 
-import type { SamplePatches, EcologicalPatch } from "./patch-tensor.js";
+import type { SamplePatches } from "./patch-tensor.js";
 import { PATCH_DIM } from "./patch-tensor.js";
+
+const TOP_K = 5; // Only use 5 nearest neighbors for transport
 
 /** A triangle in the module graph */
 interface Triangle {
@@ -35,22 +33,17 @@ interface Triangle {
 
 /** Curvature distribution for a sample pair */
 export interface HolonomyResult {
-  /** Per-triangle curvature values for this pair */
   readonly curvatures: readonly number[];
-  /** Mean curvature */
   readonly meanCurvature: number;
-  /** Curvature at P25, P50, P75, P90 */
   readonly p25: number;
   readonly p50: number;
   readonly p75: number;
   readonly p90: number;
-  /** Number of triangles found */
   readonly triangleCount: number;
 }
 
 /**
  * Find all triangles in the module graph.
- * A triangle = three modules that are all pairwise connected.
  */
 export function findTriangles(patches: SamplePatches): Triangle[] {
   const n = patches.graphN;
@@ -72,67 +65,32 @@ export function findTriangles(patches: SamplePatches): Triangle[] {
 }
 
 /**
- * Compute holonomy curvatures for triangles in sample A
- * using a coherence field mapping A → B.
- *
- * For each triangle (i,j,k) in A:
- *   1. Map patch_A[i] to B-space via kernel regression
- *   2. Find nearest B-module to the mapped position
- *   3. Map that B-module's patch back to A-space
- *   4. Continue around the triangle: i→B→j→B→k→B→i
- *   5. Measure how far the round-trip result is from the start
- *
- * Low curvature = the field is "flat" = structure is consistently mapped
- * High curvature = the field is "curved" = mapping is locally inconsistent
+ * Compute holonomy curvatures using TOP-K sharp transport.
  */
 export function computeHolonomy(
-  a: SamplePatches,
-  b: SamplePatches,
+  source: SamplePatches,
+  target: SamplePatches,
   triangles: Triangle[],
 ): HolonomyResult {
   if (triangles.length === 0) {
     return { curvatures: [], meanCurvature: 0, p25: 0, p50: 0, p75: 0, p90: 0, triangleCount: 0 };
   }
 
-  // Build kernel: A→B affinity matrix
-  const kernel = buildGaussianKernel(a, b);
-  // Build kernel: B→A affinity matrix
-  const kernelBA = buildGaussianKernel(b, a);
+  // Build top-k transport maps
+  const fwdMap = buildTopKMap(source, target); // source[i] → target space
+  const revMap = buildTopKMap(target, source); // target[j] → source space
 
   const curvatures: number[] = [];
 
   for (const tri of triangles) {
-    // Transport patch[i] through the triangle via B-space
-    // Step 1: i → B (map i's patch to B-space)
-    const mappedI = mapToTarget(a.patches[tri.i]!, kernel, tri.i, b);
+    // Transport around triangle: i → target → back to see if we land near j
+    const holIJ = edgeHolonomy(tri.i, tri.j, source, target, fwdMap, revMap);
+    const holJK = edgeHolonomy(tri.j, tri.k, source, target, fwdMap, revMap);
+    const holKI = edgeHolonomy(tri.k, tri.i, source, target, fwdMap, revMap);
 
-    // Step 2: Find nearest B-module to mapped position
-    const nearestJ = findNearest(mappedI, b);
-
-    // Step 3: B[nearestJ] → A (map back to find correspondent of j)
-    const mappedBack = mapToTarget(b.patches[nearestJ]!, kernelBA, nearestJ, a);
-
-    // Step 4: Measure distance from mapped-back to actual patch[j]
-    const distIJ = tensorDistance(mappedBack, a.patches[tri.j]!.tensor);
-
-    // Repeat for j→k edge
-    const mappedJ = mapToTarget(a.patches[tri.j]!, kernel, tri.j, b);
-    const nearestK = findNearest(mappedJ, b);
-    const mappedBackK = mapToTarget(b.patches[nearestK]!, kernelBA, nearestK, a);
-    const distJK = tensorDistance(mappedBackK, a.patches[tri.k]!.tensor);
-
-    // And k→i edge
-    const mappedK = mapToTarget(a.patches[tri.k]!, kernel, tri.k, b);
-    const nearestI = findNearest(mappedK, b);
-    const mappedBackI = mapToTarget(b.patches[nearestI]!, kernelBA, nearestI, a);
-    const distKI = tensorDistance(mappedBackI, a.patches[tri.i]!.tensor);
-
-    // Holonomy = average edge distortion around the triangle
-    const holonomy = (distIJ + distJK + distKI) / 3;
-    curvatures.push(holonomy);
+    curvatures.push((holIJ + holJK + holKI) / 3);
   }
 
-  // Sort for percentiles
   const sorted = [...curvatures].sort((a, b) => a - b);
   const n = sorted.length;
 
@@ -148,123 +106,147 @@ export function computeHolonomy(
 }
 
 /**
- * Compare curvature distributions between two different pair computations.
- * Returns a similarity score [0, 1]: high = similar distributions.
+ * Compare curvature distributions via EMD (Earth Mover's Distance).
+ * Returns similarity = 1 / (1 + EMD).
  */
 export function compareCurvatureDistributions(
   holA: HolonomyResult,
   holB: HolonomyResult,
 ): number {
-  if (holA.triangleCount === 0 || holB.triangleCount === 0) return 0;
+  if (holA.triangleCount < 3 || holB.triangleCount < 3) return 0;
 
-  // Build normalized histograms of curvatures
-  const BINS = 20;
+  // Build CDFs from sorted curvatures
+  const BINS = 30;
   const maxCurv = Math.max(
-    holA.curvatures[holA.curvatures.length - 1] ?? 1,
-    holB.curvatures[holB.curvatures.length - 1] ?? 1,
+    holA.curvatures.length > 0 ? Math.max(...holA.curvatures) : 1,
+    holB.curvatures.length > 0 ? Math.max(...holB.curvatures) : 1,
     0.01,
   );
 
-  const histA = new Float64Array(BINS);
-  const histB = new Float64Array(BINS);
+  const cdfA = new Float64Array(BINS);
+  const cdfB = new Float64Array(BINS);
 
   for (const c of holA.curvatures) {
     const bin = Math.min(Math.floor((c / maxCurv) * BINS), BINS - 1);
-    histA[bin]! += 1 / holA.triangleCount;
+    cdfA[bin]! += 1 / holA.triangleCount;
   }
   for (const c of holB.curvatures) {
     const bin = Math.min(Math.floor((c / maxCurv) * BINS), BINS - 1);
-    histB[bin]! += 1 / holB.triangleCount;
+    cdfB[bin]! += 1 / holB.triangleCount;
   }
 
-  // Bhattacharyya coefficient: sum(sqrt(p*q))
-  let bc = 0;
+  // Convert to CDFs
+  for (let i = 1; i < BINS; i++) {
+    cdfA[i]! += cdfA[i - 1]!;
+    cdfB[i]! += cdfB[i - 1]!;
+  }
+
+  // EMD = sum of |CDF_A - CDF_B| (for 1D distributions)
+  let emd = 0;
   for (let i = 0; i < BINS; i++) {
-    bc += Math.sqrt(histA[i]! * histB[i]!);
+    emd += Math.abs(cdfA[i]! - cdfB[i]!);
   }
+  emd /= BINS; // Normalize
 
-  return bc; // 1 = identical distributions, 0 = no overlap
+  return 1 / (1 + emd * 10); // Scale so differences are visible
 }
 
-// ── Internal helpers ──
+// ── Top-K transport map ──
 
-function buildGaussianKernel(
+interface TopKEntry {
+  indices: Int32Array;
+  weights: Float64Array;
+}
+
+function buildTopKMap(
   source: SamplePatches,
   target: SamplePatches,
-): Float64Array {
+): TopKEntry[] {
   const nS = source.n;
   const nT = target.n;
-  const K = new Float64Array(nS * nT);
-  const dists: number[] = [];
+  const k = Math.min(TOP_K, nT);
+  const map: TopKEntry[] = [];
 
   for (let i = 0; i < nS; i++) {
+    // Find k nearest target modules by patch tensor distance
+    const dists: { idx: number; dist: number }[] = [];
     for (let j = 0; j < nT; j++) {
       let d2 = 0;
-      for (let k = 0; k < PATCH_DIM; k++) {
-        const diff = source.patches[i]!.tensor[k]! - target.patches[j]!.tensor[k]!;
+      for (let dim = 0; dim < PATCH_DIM; dim++) {
+        const diff = source.patches[i]!.tensor[dim]! - target.patches[j]!.tensor[dim]!;
         d2 += diff * diff;
       }
-      const d = Math.sqrt(d2);
-      K[i * nT + j] = d;
-      dists.push(d);
+      dists.push({ idx: j, dist: Math.sqrt(d2) });
     }
+    dists.sort((a, b) => a.dist - b.dist);
+
+    const indices = new Int32Array(k);
+    const weights = new Float64Array(k);
+
+    // Softmax over top-k distances
+    const topK = dists.slice(0, k);
+    const minDist = topK[0]!.dist;
+    let wSum = 0;
+    for (let j = 0; j < k; j++) {
+      weights[j] = Math.exp(-(topK[j]!.dist - minDist));
+      indices[j] = topK[j]!.idx;
+      wSum += weights[j]!;
+    }
+    for (let j = 0; j < k; j++) weights[j]! /= wSum;
+
+    map.push({ indices, weights });
   }
 
-  // Median bandwidth
-  dists.sort((a, b) => a - b);
-  const sigma = Math.max(dists[Math.floor(dists.length / 2)] ?? 1, 0.01);
-
-  for (let idx = 0; idx < nS * nT; idx++) {
-    K[idx] = Math.exp(-(K[idx]! * K[idx]!) / (2 * sigma * sigma));
-  }
-
-  return K;
+  return map;
 }
 
-function mapToTarget(
-  patch: EcologicalPatch,
-  kernel: Float64Array,
-  sourceIdx: number,
+/** Compute per-edge holonomy: map source[i] through target and back, measure distance to source[j] */
+function edgeHolonomy(
+  i: number,
+  j: number,
+  source: SamplePatches,
   target: SamplePatches,
-): Float64Array {
-  const nT = target.n;
-  const result = new Float64Array(PATCH_DIM);
-
-  // Kernel-weighted mean in target space
-  let wSum = 0;
-  for (let j = 0; j < nT; j++) {
-    wSum += kernel[sourceIdx * nT + j]!;
-  }
-  if (wSum < 1e-15) return result;
-
-  for (let j = 0; j < nT; j++) {
-    const w = kernel[sourceIdx * nT + j]! / wSum;
-    for (let k = 0; k < PATCH_DIM; k++) {
-      result[k]! += w * target.patches[j]!.tensor[k]!;
+  fwdMap: TopKEntry[],
+  revMap: TopKEntry[],
+): number {
+  // Map source[i] → target space
+  const mapped = new Float64Array(PATCH_DIM);
+  const fwd = fwdMap[i]!;
+  for (let ki = 0; ki < fwd.indices.length; ki++) {
+    const tIdx = fwd.indices[ki]!;
+    const w = fwd.weights[ki]!;
+    for (let d = 0; d < PATCH_DIM; d++) {
+      mapped[d]! += w * target.patches[tIdx]!.tensor[d]!;
     }
   }
 
-  return result;
-}
-
-function findNearest(mapped: Float64Array, target: SamplePatches): number {
-  let best = Infinity;
-  let bestJ = 0;
-  for (let j = 0; j < target.n; j++) {
+  // Find nearest target module to mapped position
+  let bestDist = Infinity;
+  let bestT = 0;
+  for (let t = 0; t < target.n; t++) {
     let d2 = 0;
-    for (let k = 0; k < PATCH_DIM; k++) {
-      const diff = mapped[k]! - target.patches[j]!.tensor[k]!;
+    for (let d = 0; d < PATCH_DIM; d++) {
+      const diff = mapped[d]! - target.patches[t]!.tensor[d]!;
       d2 += diff * diff;
     }
-    if (d2 < best) { best = d2; bestJ = j; }
+    if (d2 < bestDist) { bestDist = d2; bestT = t; }
   }
-  return bestJ;
-}
 
-function tensorDistance(a: Float64Array, b: Float64Array): number {
+  // Map target[bestT] back to source space
+  const mappedBack = new Float64Array(PATCH_DIM);
+  const rev = revMap[bestT]!;
+  for (let ki = 0; ki < rev.indices.length; ki++) {
+    const sIdx = rev.indices[ki]!;
+    const w = rev.weights[ki]!;
+    for (let d = 0; d < PATCH_DIM; d++) {
+      mappedBack[d]! += w * source.patches[sIdx]!.tensor[d]!;
+    }
+  }
+
+  // Distance from mapped-back to actual source[j]
   let d2 = 0;
-  for (let k = 0; k < PATCH_DIM; k++) {
-    const diff = a[k]! - b[k]!;
+  for (let d = 0; d < PATCH_DIM; d++) {
+    const diff = mappedBack[d]! - source.patches[j]!.tensor[d]!;
     d2 += diff * diff;
   }
   return Math.sqrt(d2);
