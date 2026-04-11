@@ -359,7 +359,26 @@ export const myAlgorithm: SymbioAlgorithm = {
 | Module Persistence v3 | `module-persistence.ts` | PASSES (+3.36% sep, +0.13% gap) |
 | Coalition Transfer v3 | `coalition-transfer.ts` | PASSES (+1.97% sep, +0.06% gap) |
 | Module Stability v4 | `module-stability.ts` | FAILS (coverage confound) |
-| Spectral Ecology v2 | `spectral-ecology.ts` | Iterating (+1.01% sep) |
+| Spectral Ecology v7 | `spectral-ecology.ts` | Best gap -0.61% |
+| Spectral Ecology v8 | `spectral-ecology-v8.ts` | Holonomy, top-3 parent-child |
+| Spectral Ecology v9 | `spectral-ecology-v9.ts` | Intrinsic curvature, best sep +3.20% |
+| Spectral Ecology v10 | `spectral-ecology-v10.ts` | Hybrid, best balanced -1.66% |
+
+### CRITICAL: Representation audit (April 2026)
+
+**The invariant-design program is PAUSED.** The representation audit (`representation-audit.ts`) showed:
+
+- **0/15 features pass signal-to-nuisance ratio > 3**
+- **Curvature mean/std have ratio < 1** (noise dominates signal)
+- **Shuffling read order changes graph structure 45-607%** (not deterministic)
+
+**No new spectral ecology version (v11+) should be built until the representation passes reliability gates:**
+
+1. Self-perturbation CV < 0.10 for all scored features
+2. Shuffle sensitivity < 5% for all scored features
+3. Signal-to-nuisance ratio > 3 for all scored features
+
+The next phase is **representation canonicalization**, not invariant design. See `representation-audit-2026-04.pdf`.
 
 ### Adding a new report
 
