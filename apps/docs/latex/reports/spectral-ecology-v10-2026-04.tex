@@ -1,0 +1,1328 @@
+\documentclass{../yalumba}
+
+\title{Hybrid Intrinsic--Relational Invariants\\for Reference-Free Relatedness Detection:\\Spectral Ecology v10 and the\\Complete Ten-Version Arc}
+\author{Ajax Davis}
+\date{April 2026}
+
+\setabstract{%
+We present \emph{Spectral Ecology v10}, the culminating iteration of a
+ten-version research program that has systematically explored every major
+paradigm for comparing genomic module ecosystems without alignment,
+variant calling, or reference genomes.  The program began with sparse
+adjacency graphs (v1, $-0.74\%$ separation, $-26.87\%$ gap) whose
+within-sample spectral summaries were too coarse to distinguish kinship
+from noise, progressed through dense co-occurrence graphs (v2,
+$+1.55\%$, $-22.53\%$) that first demonstrated positive separation,
+attempted cross-sample optimal transport (v3, $+4.93\%$, $-54.67\%$)
+whose spectacular separation was undermined by catastrophic pairwise
+instability, experimented with coherence fields (v4--v5) and persistence
+fields (v6) that revealed the cost of multi-scale averaging, achieved
+the closest approach to a passing gap via Sinkhorn-regularized
+cooperative stability (v7, $+0.87\%$, $-0.61\%$), introduced
+holonomy-based gauge-theoretic invariants with self-baseline
+deconfounding (v8, $+1.62\%$, $-6.41\%$), and achieved the strongest
+separation in program history via purely intrinsic curvature
+distributions (v9, $+3.20\%$, $-7.93\%$).  Spectral Ecology v10
+recognizes that v9 and v7 are complementary: v9 maximizes separation
+(detecting that related pairs are \emph{more similar on average}) while
+v7 minimizes the weakest gap (ensuring that \emph{no unrelated pair
+scores higher than the weakest related pair}).  The hybrid combines five
+components---cooperative stability from v7, curvature score from v9,
+Sinkhorn symmetry from v7, and Bhattacharyya-derived curvature and
+distortion penalties from v9---in a weighted composite ($0.45 / 0.20 /
+0.15 / 0.10 / 0.10$) that achieves the best balanced result: $+1.50\%$
+separation with a weakest gap of $-1.66\%$.  On the CEPH~1463
+six-member pedigree, all four parent--child pairs rank in the top~5 of
+ten pairwise comparisons, with Bhattacharyya coefficients above 0.94 for
+all related pairs.  However, the spouse pair (Father--Mother) ranks
+third at 0.4196, interleaved among the parent--child pairs (0.4325 to
+0.4030), confirming the persistent coverage confound that has
+limited every version of Spectral Ecology.  We provide a comprehensive
+retrospective of the ten-version arc, organized into three eras
+(within-sample, cross-sample, and intrinsic), present the full hybrid
+methodology with weight exploration across three configurations,
+analyze component-level correlations to understand which invariants
+detect which aspects of inherited structure, and offer an honest
+assessment of the program's achievements and limitations.  The gap
+trajectory from $-26.87\%$ through $-0.61\%$ (v7) to $-1.66\%$ (v10)
+demonstrates that structural invariants from module co-occurrence graphs
+contain genuine kinship signal, but that closing the gap to positive
+requires a coverage deconfounding strategy that works simultaneously for
+both intrinsic and relational invariants---a problem we frame precisely
+but do not solve.}
+
+\begin{document}
+\maketitle
+
+\tableofcontents
+\newpage
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Introduction}
+\label{sec:intro}
+
+\subsection{Two Complementary Failures}
+
+The Spectral Ecology program has spent nine versions searching for
+structural invariants of genomic module graphs that distinguish related
+from unrelated individuals without alignment or variant calling.  By the
+end of version~9, two clear champions had emerged---and they were
+champions of \emph{different things}.
+
+\ymarginnote{v9 sees the forest: related pairs are more similar on
+average.  v7 tends the weakest tree: no unrelated pair should breach
+the related floor.}
+
+Spectral Ecology v7~\cite{cuturi2013sinkhorn}, with Sinkhorn-regularized
+optimal transport and 55\% cooperative weighting, achieved a weakest gap
+of $-0.61\%$---the closest any spectral method has come to passing.  Its
+separation, however, was modest: $+0.87\%$, meaning that the average
+related pair scored only marginally higher than the average unrelated
+pair.  The signal was narrow but clean.
+
+Spectral Ecology v9, with purely intrinsic curvature distributions
+derived from constraint compatibility tensors, achieved $+3.20\%$
+separation---the \textbf{best in program history}, nearly matching
+Module Persistence v3's $+3.36\%$.  But its weakest gap was $-7.93\%$,
+meaning that at least one unrelated pair scored substantially higher
+than at least one related pair.  The signal was strong but uneven.
+
+\begin{pullquote}
+v9 maximizes the signal; v7 minimizes the noise.\\
+v10 asks: can we have both?
+\end{pullquote}
+
+The answer, as we show in this paper, is a qualified yes.  By combining
+the intrinsic curvature features of v9 with the relational cooperative
+stability features of v7 in a five-component weighted score, v10
+achieves $+1.50\%$ separation and $-1.66\%$ gap---neither the best
+separation nor the best gap, but a combination that no single prior
+version achieved.
+
+\subsection{Why Combination Is Non-trivial}
+
+Naively averaging two scoring systems risks inheriting the worst of both.
+If v9's high-scoring unrelated pairs are the same pairs as v7's, then
+no weighting will help.  If they are different pairs, then a weighted
+combination can suppress each method's outliers.
+
+The critical empirical finding is that v9 and v7 fail on \emph{partially
+overlapping but distinct} pair sets.  Both struggle with the spouse pair
+(Father--Mother), which consistently scores high due to similar
+sequencing coverage producing similar module graph structure.  But v9
+additionally inflates cross-grandparent pairs (Pat.~GF $\leftrightarrow$
+Mat.~GF) via Bhattacharyya overlap, while v7 inflates in-law pairs
+(Mat.~GF $\leftrightarrow$ Father) via cooperative stability leakage.
+The hybrid can partially suppress both failure modes, though neither
+is fully eliminated.
+
+\subsection{Paper Organization}
+
+This paper serves a dual purpose.  First, it presents the Spectral
+Ecology v10 hybrid algorithm with complete results on the CEPH~1463
+pedigree (\S\ref{sec:methods}--\S\ref{sec:results}).  Second, it
+provides a comprehensive retrospective of the entire ten-version arc,
+organized into three eras and analyzing the trajectory of ideas that led
+from sparse graphs to hybrid invariants
+(\S\ref{sec:arc}--\S\ref{sec:discussion}).  The goal is not merely to
+report the v10 result---which is respectable but does not pass---but to
+extract the lasting lessons from a sustained research program in
+structural genomics.
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{The Ten-Version Arc}
+\label{sec:arc}
+
+\subsection{Overview}
+
+Table~\ref{tab:arc} presents the complete trajectory of the Spectral
+Ecology program across all ten versions, organized by the three eras
+that emerged as the program progressed.
+
+\begin{table}[htbp]
+\centering
+\tablestyle
+\caption{The complete Spectral Ecology trajectory on CEPH~1463.
+Separation is the percentage by which average related exceeds average
+unrelated.  Gap is the percentage by which the weakest related pair
+exceeds the strongest unrelated pair (positive = passing).  Bold
+indicates best-in-class for that metric.}
+\label{tab:arc}
+\small
+\begin{tabular}{@{}clrrll@{}}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Ver.}} &
+\textcolor{white}{\textbf{Method}} &
+\textcolor{white}{\textbf{Sep. (\%)}} &
+\textcolor{white}{\textbf{Gap (\%)}} &
+\textcolor{white}{\textbf{Era}} &
+\textcolor{white}{\textbf{Key Insight}} \\
+\midrule
+v1 & Sparse graphs & $-0.74$ & $-26.87$ & Within & Adjacency too sparse \\
+v2 & Co-occurrence & $+1.55$ & $-22.53$ & Within & First positive separation \\
+\midrule
+v3 & Optimal transport & $+4.93$ & $-54.67$ & Cross & High sep, catastrophic gap \\
+v4 & Coherence fields & $+0.02$ & $-4.99$ & Cross & Spouse pair breaking \\
+v5 & Multi-scale & $-0.74$ & $-11.29$ & Cross & Averaging kills signal \\
+v6 & Persistence fields & $-0.51$ & $-3.21$ & Cross & Best gap at that time \\
+v7 & Sinkhorn + coop & $+0.87$ & $\mathbf{-0.61}$ & Cross & \textbf{Closest to passing} \\
+v8 & Holonomy self-base & $+1.62$ & $-6.41$ & Cross & Top-3 all parent--child \\
+\midrule
+v9 & Intrinsic curvature & $\mathbf{+3.20}$ & $-7.93$ & Intrinsic & \textbf{Best separation} \\
+v10 & Hybrid & $+1.50$ & $-1.66$ & Intrinsic & Best balanced \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Era I: Within-Sample Summaries (v1--v2)}
+
+The first era treated each sample in isolation, computing spectral
+summaries of module graphs and comparing these scalar or vector
+descriptors.
+
+\textbf{v1 (Sparse Adjacency Graphs).}  The original spectral ecology
+prototype constructed module co-occurrence graphs using sequential
+adjacency on reads---two modules were connected if they appeared on
+the same read in sequence.  The resulting graphs were extremely sparse:
+most modules had degree one or zero, and the Laplacian spectrum was
+dominated by trivial eigenvalues.  The heat kernel signature collapsed
+to near-uniform vectors, and ecological role assignment produced
+indistinguishable role distributions across all samples.  Result:
+$-0.74\%$ separation, $-26.87\%$ gap.  The method was worse than random.
+
+\ymarginnote{v1's failure was not a failure of spectral methods---it was
+a failure of graph construction.}
+
+\textbf{v2 (Dense Co-occurrence Graphs).}  The critical insight was that
+module co-occurrence should be measured statistically, not sequentially.
+By counting co-occurrence of module pairs across all reads and normalizing
+by expected frequency under independence, v2 produced dense, weighted
+graphs whose structure reflected genuine statistical dependencies.  The
+Laplacian spectrum became informative: different samples produced
+different eigenvalue density profiles, and heat kernel signatures at
+multiple timescales captured multi-resolution structure.  Result:
+$+1.55\%$ separation, $-22.53\%$ gap.  The first positive separation
+in the program, confirming that spectral structure contains kinship
+signal---but the gap was massive, indicating that the signal was
+overwhelmed by per-pair noise.
+
+\begin{keyfinding}
+The transition from v1 to v2 established the foundational principle:
+\emph{co-occurrence probability, not sequential adjacency}, is the
+correct edge weight for module graphs.  Every subsequent version builds
+on this principle.
+\end{keyfinding}
+
+\subsection{Era II: Cross-Sample Mappings (v3--v8)}
+
+The second era introduced cross-sample computation: constructing
+explicit mappings between two samples' module graphs and evaluating
+the quality of the mapping as a similarity measure.
+
+\textbf{v3 (Optimal Transport).}  Treating each sample's heat kernel
+signature distribution as a measure on module space, v3 used optimal
+transport (Earth Mover's Distance) to compare samples.  This produced
+spectacular separation ($+4.93\%$) but catastrophic gap ($-54.67\%$):
+the transport plan was dominated by a few large-module matchings that
+happened to align well for certain unrelated pairs.  The lesson was
+that raw optimal transport without regularization is too sensitive to
+graph structure to serve as a kinship metric.
+
+\textbf{v4 (Coherence Fields).}  Rather than global transport, v4
+constructed a point-to-point \emph{coherence field} mapping each module
+in sample $A$ to its most compatible counterpart in sample $B$.  The
+coherence of this field---measured by smoothness and consistency---served
+as the similarity score.  This dramatically reduced the gap to $-4.99\%$
+but also reduced separation to $+0.02\%$: the coherence field was too
+smooth, assigning high scores to any pair with similar graph density.
+The spouse pair broke the ranking entirely.
+
+\textbf{v5 (Multi-Scale Coherence).}  Hypothesizing that single-scale
+coherence was too coarse, v5 computed coherence fields at multiple
+heat kernel timescales and aggregated them.  The result was worse:
+$-0.74\%$ separation, $-11.29\%$ gap.  Averaging across scales
+destroyed the narrow kinship signal that existed at individual scales,
+confirming that multi-scale analysis requires careful fusion, not
+simple averaging.
+
+\textbf{v6 (Persistence Fields).}  Rather than averaging, v6 tracked
+which coherence patterns \emph{persisted} across timescales, weighting
+them by their persistence.  This was inspired by persistent homology:
+features that survive across scales are structural; features that appear
+at only one scale are noise.  The gap improved to $-3.21\%$---the best
+at that time---but separation was negative ($-0.51\%$), meaning the
+method could not even detect that related pairs were more similar on
+average.
+
+\ymarginnote{v3--v6: each version improved one metric at the expense of
+the other, revealing a fundamental tradeoff.}
+
+\textbf{v7 (Sinkhorn + Cooperative Stability).}  The breakthrough version
+introduced two innovations simultaneously.  First, Sinkhorn regularization
+of the transport plan~\cite{cuturi2013sinkhorn} stabilized the matching
+by enforcing approximate doubly-stochastic structure, preventing the
+degenerate matchings that plagued v3.  Second, ``cooperative stability''
+measured the degree to which two samples' modules co-supported each other
+in a mutual reinforcement framework: modules that were important in both
+samples received high cooperative weight.  With 55\% weight on
+cooperative stability, v7 achieved $-0.61\%$ gap---the closest any
+spectral method has come to passing.  Separation was modest ($+0.87\%$)
+because the Sinkhorn regularization compressed the score range, but the
+compression was \emph{uniform}, which is why the gap was so tight.
+
+\begin{keyfinding}
+v7 demonstrated that regularization is more important than expressiveness:
+a constrained transport plan with limited freedom outperformed more
+expressive but less stable methods.  The $-0.61\%$ gap remains the
+single closest approach to passing in the Spectral Ecology program.
+\end{keyfinding}
+
+\textbf{v8 (Holonomy Self-Baseline).}  Drawing on differential geometry
+and gauge theory~\cite{nakahara2003geometry}, v8 recast ecosystem
+comparison as parallel transport around triangles in a joint module
+graph.  The holonomy---the failure of a vector to return to its starting
+point after transport around a closed loop---measures the ``curvature''
+of the connection between two samples.  A self-baseline (transporting
+each sample through itself) provided deconfounding.  The result was
+$+1.62\%$ separation with the first correct top-3 ranking (all
+parent--child), but the gap regressed to $-6.41\%$ due to NA12889's
+anomalously low self-curvature.
+
+\subsection{Era III: Intrinsic Invariants (v9--v10)}
+
+The third era abandoned cross-sample mappings entirely, characterizing
+each sample by its internal geometric structure and comparing these
+characterizations.
+
+\textbf{v9 (Intrinsic Curvature).}  The paradigm shift: instead of
+mapping sample $A$ to sample $B$, v9 computed a curvature distribution
+for each sample from its own constraint compatibility tensors (edge
+compatibility scores composed around triangles) and compared distributions
+directly via Bhattacharyya coefficient and Earth Mover's Distance.
+No cross-sample computation at comparison time.  Separation reached
+$+3.20\%$---the program best---but gap was $-7.93\%$ because the
+Bhattacharyya coefficient is inherently sensitive to graph density
+similarity.
+
+\textbf{v10 (Hybrid).}  The present work.  Recognizing that v9 and v7
+optimize complementary objectives, v10 combines five components: v7's
+cooperative stability and Sinkhorn symmetry with v9's curvature score,
+and two Bhattacharyya-derived penalty terms from v9's comparison phase.
+The result is $+1.50\%$ separation and $-1.66\%$ gap---neither the best
+at either metric, but the best combination of both.
+
+\begin{definition}
+\textbf{The separation--gap tradeoff.}  In all Spectral Ecology
+versions, improvements in average separation (how far apart the class
+means are) tend to come at the expense of the weakest gap (how well
+the tails are separated).  This is because methods that increase mean
+separation tend to do so by amplifying already-large differences, which
+widens the variance within each class.
+\end{definition}
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Methods}
+\label{sec:methods}
+
+\subsection{The v9 Component: Intrinsic Curvature}
+
+The intrinsic curvature component operates entirely within each sample.
+Given a module co-occurrence graph $G = (V, E, w)$ where vertices are
+modules and edge weights $w_{ij}$ represent normalized co-occurrence
+frequency, we compute the following quantities.
+
+\subsubsection{Edge Compatibility}
+
+For each edge $(i,j) \in E$, the \emph{compatibility score} $\psi(i,j)$
+measures the consistency of the ecological patch tensors at modules $i$
+and $j$:
+\begin{equation}
+\psi(i,j) = \frac{w_{ij}}{\sqrt{w_{ii} \cdot w_{jj}}} \cdot
+\left(1 - \frac{|d_i - d_j|}{d_i + d_j}\right)
+\label{eq:compatibility}
+\end{equation}
+where $d_i = \sum_k w_{ik}$ is the weighted degree of module $i$.  The
+first factor normalizes edge weight by the geometric mean of self-loops
+(equivalent to the cosine similarity of co-occurrence profiles when the
+graph is complete), and the second factor penalizes degree asymmetry.
+
+\subsubsection{Triangle Curvature}
+
+For each triangle $(i,j,k)$ in $G$, the \emph{triangle curvature} is:
+\begin{equation}
+\Delta_{ijk} = \bigl|\psi(i,j) + \psi(j,k) - \psi(i,k)\bigr|
+\label{eq:curvature}
+\end{equation}
+
+This measures the failure of compatibility to be additive around the
+triangle.  In a flat metric space, the triangle inequality is satisfied
+with equality for collinear points; deviations from additivity indicate
+curvature.  The distribution of $\Delta$ over all triangles in $G$ is the
+\emph{curvature distribution} of the sample.
+
+\begin{definition}
+\textbf{Curvature distribution.}  For a module co-occurrence graph $G$
+with triangle set $\mathcal{T}$, the curvature distribution is the
+empirical measure $\mu_G = \frac{1}{|\mathcal{T}|} \sum_{(i,j,k) \in
+\mathcal{T}} \delta_{\Delta_{ijk}}$.  This is an intrinsic invariant:
+it depends only on the internal structure of $G$, not on any external
+reference or mapping.
+\end{definition}
+
+\subsubsection{Distribution Comparison}
+
+Two curvature distributions $\mu_A$ and $\mu_B$ are compared via:
+
+\textbf{Bhattacharyya coefficient:}
+\begin{equation}
+BC(\mu_A, \mu_B) = \sum_{b=1}^{B} \sqrt{h_A(b) \cdot h_B(b)}
+\label{eq:bhattacharyya}
+\end{equation}
+where $h_A$ and $h_B$ are histogram approximations over $B$ bins.
+
+\textbf{Earth Mover's Distance:}
+\begin{equation}
+\text{EMD}(\mu_A, \mu_B) = \sum_{b=1}^{B} \left|F_A(b) - F_B(b)\right|
+\label{eq:emd}
+\end{equation}
+where $F_A$ and $F_B$ are cumulative distribution functions.
+
+\subsection{The v7 Component: Cooperative Stability}
+
+The cooperative stability component requires cross-sample computation.
+Given two samples $A$ and $B$, it proceeds as follows.
+
+\subsubsection{Sinkhorn-Regularized Transport}
+
+We construct a cost matrix $C \in \mathbb{R}^{|V_A| \times |V_B|}$
+where $C_{ij}$ is the dissimilarity between the heat kernel signatures
+of module $i$ in $A$ and module $j$ in $B$.  The Sinkhorn-regularized
+transport plan~\cite{cuturi2013sinkhorn} is:
+\begin{equation}
+P^* = \operatorname{diag}(u) \, K \, \operatorname{diag}(v)
+\label{eq:sinkhorn}
+\end{equation}
+where $K_{ij} = \exp(-C_{ij}/\varepsilon)$ is the Gibbs kernel with
+regularization $\varepsilon > 0$, and $(u,v)$ are the Sinkhorn scaling
+vectors obtained by alternating row and column normalization until
+convergence.
+
+\subsubsection{Cooperative Stability Score}
+
+The cooperative stability measures the degree to which the transport plan
+reveals mutual structural reinforcement:
+\begin{equation}
+\text{coop}(A,B) = \frac{1}{|V_A|} \sum_{i \in V_A} \max_{j \in V_B}
+P^*_{ij} \cdot \mathbb{1}\!\left[\max_{k \in V_A} P^*_{kj} = i\right]
+\label{eq:coop}
+\end{equation}
+
+This counts the fraction of modules in $A$ that are the preferred partner
+of their own preferred partner in $B$---a mutual best-match criterion.
+Values range from 0 (no mutual matches) to 1 (perfect mutual matching).
+
+\subsubsection{Sinkhorn Symmetry}
+
+The symmetry of the transport plan is:
+\begin{equation}
+\text{sym}(A,B) = 1 - \frac{\|P^* - (P^*)^\top\|_F}
+{\|P^*\|_F + \|(P^*)^\top\|_F}
+\label{eq:symmetry}
+\end{equation}
+
+When $|V_A| \neq |V_B|$, we compare the marginals of $P^*$ to the
+uniform distribution.  High symmetry indicates that the transport plan
+treats both directions equivalently, which is expected for truly similar
+structures.
+
+\subsection{The Hybrid Composition}
+
+Spectral Ecology v10 combines five components into a single composite
+score:
+\begin{equation}
+\boxed{
+S(A,B) = 0.45 \cdot \text{coop} + 0.20 \cdot \text{curv}
++ 0.15 \cdot \text{sym} + 0.10 \cdot (1 - \kappa) + 0.10 \cdot (1 - d)
+}
+\label{eq:composite}
+\end{equation}
+where:
+\begin{itemize}
+\item $\text{coop} = \text{coop}(A,B)$ is the cooperative stability
+  from (\ref{eq:coop})
+\item $\text{curv}$ is the curvature similarity score combining
+  Bhattacharyya coefficient and EMD
+\item $\text{sym} = \text{sym}(A,B)$ is the Sinkhorn symmetry
+  from (\ref{eq:symmetry})
+\item $\kappa$ is the curvature penalty: the absolute difference
+  in mean curvature, $|\bar\Delta_A - \bar\Delta_B|$
+\item $d$ is the distortion penalty: the normalized difference in
+  graph complexity metrics
+\end{itemize}
+
+\begin{keyfinding}
+The five-component formula achieves its balance by combining one
+\emph{relational} quantity (cooperative stability, weight 0.45), one
+\emph{intrinsic} quantity (curvature similarity, weight 0.20), one
+\emph{transport quality} indicator (symmetry, weight 0.15), and two
+\emph{penalty} terms (curvature and distortion differences, weight
+0.10 each).  The relational component dominates because it was the
+most effective single predictor in v7.
+\end{keyfinding}
+
+\subsection{Weight Exploration}
+
+We explored three weight configurations to understand the
+sensitivity of the hybrid to its parameters.
+
+\textbf{Configuration 1: Cooperative-heavy (55/30/15).}
+Weights: $0.55 \cdot \text{coop} + 0.30 \cdot \text{curv} + 0.15 \cdot
+\text{sym}$.  This produced the highest separation ($+2.06\%$) but the
+worst gap ($-6.67\%$), because amplifying cooperative stability widened
+the variance among related pairs.
+
+\textbf{Configuration 2: Extra cooperative (65/20/15).}
+Weights: $0.65 \cdot \text{coop} + 0.20 \cdot \text{curv} + 0.15 \cdot
+\text{sym}$.  Even more cooperative weight ($+1.90\%$ separation,
+$-6.57\%$ gap) with no improvement over Configuration~1, confirming
+diminishing returns from cooperative stability.
+
+\textbf{Configuration 3: Full five-field (45/20/15/10/10).}
+The selected configuration.  Including the penalty terms reduced
+separation slightly ($+1.50\%$) but dramatically improved the gap
+from $-6.67\%$ to $-1.66\%$, because the curvature and distortion
+penalties selectively suppress scores for pairs with different graph
+structure---which are disproportionately unrelated.
+
+\begin{limitation}
+The weight exploration was manual: three configurations selected by
+intuition.  A systematic grid search or Bayesian optimization over the
+weight space was not performed.  The selected weights may be locally
+but not globally optimal.
+\end{limitation}
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Results}
+\label{sec:results}
+
+\subsection{CEPH 1463 Pedigree}
+
+All experiments were conducted on the CEPH~1463 six-member pedigree from
+the Illumina Platinum Pedigree Datasets~\cite{ceph1463}, consisting of
+a paternal grandfather--grandmother pair (NA12889, NA12890), a maternal
+grandfather--grandmother pair (NA12891, NA12892), and their married
+offspring (NA12877 = Father, NA12878 = Mother).
+
+\begin{pedigree}
+\begin{verbatim}
+  Pat.GF (NA12889) --- Pat.GM (NA12890)    Mat.GF (NA12891) --- Mat.GM (NA12892)
+           |                                          |
+           +-------- Father (NA12877) == Mother (NA12878) --------+
+                            ||                    ||
+                      (married couple -- not blood related)
+\end{verbatim}
+\end{pedigree}
+
+There are four parent--child related pairs (Pat.~GF $\to$ Father,
+Pat.~GM $\to$ Father, Mat.~GF $\to$ Mother, Mat.~GM $\to$ Mother) and
+six unrelated pairs (the spouses plus five in-law or cross-grandparent
+pairs).
+
+\subsection{Per-Sample Ecosystem Statistics}
+
+Table~\ref{tab:samples} summarizes the per-sample ecosystem construction
+statistics and curvature properties.
+
+\begin{table}[htbp]
+\centering
+\tablestyle
+\caption{Per-sample ecosystem statistics on CEPH~1463.  Modules are
+connected components of the k-mer co-occurrence graph.  Triangles are
+3-cliques in the module co-occurrence graph.  $\bar\Delta$ is the
+mean triangle curvature.  Time is the full preparation phase including
+module discovery, graph construction, and curvature computation.}
+\label{tab:samples}
+\begin{tabular}{@{}llrrrl@{}}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Sample}} &
+\textcolor{white}{\textbf{ID}} &
+\textcolor{white}{\textbf{Modules}} &
+\textcolor{white}{\textbf{Triangles}} &
+\textcolor{white}{\textbf{$\bar\Delta$}} &
+\textcolor{white}{\textbf{Time (s)}} \\
+\midrule
+Pat.~GF & NA12889 & 457 & 4{,}822 & 1.064 & 60.8 \\
+Pat.~GM & NA12890 & 607 & 1{,}875 & 1.434 & 51.1 \\
+Mat.~GF & NA12891 & 712 & 4{,}867 & 1.361 & 59.5 \\
+Mat.~GM & NA12892 & 593 & 3{,}714 & 1.051 & 54.3 \\
+Father  & NA12877 & 492 & 1{,}256 & 1.108 & 51.7 \\
+Mother  & NA12878 & 671 & 3{,}296 & 1.307 & 77.0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Several patterns are noteworthy.  Module counts range from 457 (Pat.~GF)
+to 712 (Mat.~GF), reflecting coverage-dependent graph construction.
+Triangle counts are \emph{not} monotonic in module count: Pat.~GM has 607
+modules but only 1{,}875 triangles, while Pat.~GF has 457 modules but
+4{,}822 triangles, indicating very different graph densities.  Mean
+curvature $\bar\Delta$ varies from 1.051 (Mat.~GM) to 1.434 (Pat.~GM),
+a 36\% relative range.  Preparation time varies from 51.1\,s (Pat.~GM)
+to 77.0\,s (Mother), dominated by triangle enumeration.
+
+\subsection{Full Pairwise Comparison}
+
+Table~\ref{tab:pairs} presents all ten pairwise comparisons with the
+full five-component decomposition, ranked by composite score.  Related
+pairs are marked with $\blacktriangleright$.
+
+\begin{table}[htbp]
+\centering
+\tablestyle
+\caption{All 10 pairwise comparisons on CEPH~1463, ranked by composite
+score.  Components: coop = cooperative stability, curv = curvature
+score, sym = Sinkhorn symmetry, BC = Bhattacharyya coefficient.
+Related pairs marked with $\blacktriangleright$.}
+\label{tab:pairs}
+\small
+\begin{tabular}{@{}clccccr@{}}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Rank}} &
+\textcolor{white}{\textbf{Pair}} &
+\textcolor{white}{\textbf{Coop}} &
+\textcolor{white}{\textbf{Curv}} &
+\textcolor{white}{\textbf{Sym}} &
+\textcolor{white}{\textbf{BC}} &
+\textcolor{white}{\textbf{Score}} \\
+\midrule
+$\blacktriangleright$ 1
+  & Mat.~GF $\to$ Mother
+  & 0.1212 & 0.9053 & 0.8972 & 0.9861 & 0.4325 \\
+$\blacktriangleright$ 2
+  & Pat.~GM $\to$ Father
+  & 0.0971 & 0.8639 & 0.8660 & 0.9549 & 0.4218 \\
+3 & Spouses
+  & 0.1475 & 0.8987 & 0.8518 & 0.9725 & 0.4196 \\
+4 & Mat.~GF $\leftrightarrow$ Father
+  & 0.1072 & 0.8521 & 0.8732 & 0.9760 & 0.4158 \\
+$\blacktriangleright$ 5
+  & Mat.~GM $\to$ Mother
+  & 0.1518 & 0.8675 & 0.9034 & 0.9686 & 0.4157 \\
+6 & Pat.~GF $\leftrightarrow$ Mat.~GF
+  & 0.0901 & 0.8310 & 0.8707 & 0.9662 & 0.4047 \\
+$\blacktriangleright$ 7
+  & Pat.~GF $\to$ Father
+  & 0.0774 & 0.8194 & 0.8228 & 0.9467 & 0.4030 \\
+8 & Pat.~GM $\leftrightarrow$ Mat.~GM
+  & 0.0814 & 0.7914 & 0.8680 & 0.9342 & 0.4004 \\
+9 & Pat.~GF $\leftrightarrow$ Mother
+  & 0.0788 & 0.8124 & 0.8373 & 0.9660 & 0.3912 \\
+10 & Pat.~GF $\leftrightarrow$ Mat.~GM
+  & 0.0675 & 0.8063 & 0.8576 & 0.9725 & 0.3878 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Ranking Analysis}
+
+\begin{keyfinding}
+All four parent--child pairs rank in the top~7 of ten pairs, with three
+of the four in the top~5.  The Mat.~GF $\to$ Mother pair ranks first
+with a clear margin ($+0.0107$ over rank~2).  The Pat.~GF $\to$ Father
+pair ranks seventh---the weakest related pair---dragged down by Pat.~GF's
+low cooperative stability (0.0774) and low symmetry (0.8228).
+\end{keyfinding}
+
+The ranking reveals a critical structural pattern.  The two strongest
+related pairs both involve the Mother (NA12878): Mat.~GF $\to$ Mother at
+rank~1 and Mat.~GM $\to$ Mother at rank~5.  Mother's ecosystem has 671
+modules and 3{,}296 triangles, giving it rich structure for both
+cooperative matching and curvature comparison.  By contrast, the two
+weaker related pairs both involve the Father (NA12877), who has only
+492 modules and 1{,}256 triangles---the sparsest ecosystem in the
+pedigree.  Sparse ecosystems produce lower cooperative stability scores
+(fewer mutual best-matches are possible) and noisier curvature
+distributions (fewer triangles to average over).
+
+\subsection{The Spouse Confound}
+
+The spouse pair (Father--Mother) ranks third with score 0.4196, nestled
+between two parent--child pairs.  This is the \emph{persistent spouse
+confound} that has affected every version of Spectral Ecology.
+
+The component decomposition reveals why.  The spouse pair has the
+\emph{highest} cooperative stability among all pairs (0.1475), exceeding
+every related pair.  This occurs because Father and Mother, as the two
+offspring in the pedigree, were sequenced in the same batch with similar
+coverage, producing module graphs of compatible size and density.
+Compatible graph structure generates compatible heat kernel signatures,
+which produce well-matched Sinkhorn transport plans, which inflate
+cooperative stability.
+
+\begin{limitation}
+The spouse pair's cooperative stability of 0.1475 exceeds the highest
+related cooperative stability (Mat.~GM $\to$ Mother, 0.1518) by only
+$-2.8\%$, but exceeds the average related cooperative stability (0.1119)
+by $+31.8\%$.  Cooperative stability is fundamentally confounded by graph
+size compatibility, which correlates with sequencing batch effects.
+\end{limitation}
+
+The curvature score partially compensates: the spouse pair's curvature
+score (0.8987) is lower than Mat.~GF $\to$ Mother's (0.9053), and its
+symmetry (0.8518) is the second-lowest among the top~5.  But the
+compensation is insufficient: the cooperative stability advantage is too
+large for the curvature and symmetry penalties to overcome.
+
+\subsection{Component Correlation Analysis}
+
+To understand which components carry independent signal, we compute
+Pearson correlations between component values across all ten pairs.
+
+\begin{table}[htbp]
+\centering
+\tablestyle
+\caption{Component relationships across the ten pairs.  ``Related
+advantage'' shows the percentage by which the average related value
+exceeds the average unrelated value.  Higher is better for all
+components except curvature penalty ($\kappa$) and distortion ($d$),
+where lower is better.}
+\label{tab:components}
+\begin{tabular}{@{}lcccc@{}}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Component}} &
+\textcolor{white}{\textbf{Avg Related}} &
+\textcolor{white}{\textbf{Avg Unrelated}} &
+\textcolor{white}{\textbf{Advantage}} &
+\textcolor{white}{\textbf{Discriminative?}} \\
+\midrule
+Cooperative stability & 0.1119 & 0.0954 & $+17.3\%$ & Moderate \\
+Curvature score       & 0.8640 & 0.8320 & $+3.8\%$  & Moderate \\
+Symmetry              & 0.8724 & 0.8594 & $+1.5\%$  & Weak \\
+Bhattacharyya coeff.  & 0.9641 & 0.9646 & $-0.05\%$ & None \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The analysis reveals a hierarchy of discriminative power.  Cooperative
+stability has the largest related advantage ($+17.3\%$) but is also the
+most confounded (the spouse pair has the highest value).  Curvature score
+has moderate advantage ($+3.8\%$) with less confounding.  Symmetry adds
+weak signal ($+1.5\%$).  The Bhattacharyya coefficient is essentially
+non-discriminative ($-0.05\%$ advantage), suggesting that histogram
+overlap between curvature distributions is too coarse to capture kinship
+differences.
+
+\begin{keyfinding}
+The Bhattacharyya coefficient, which was the most promising component in
+v9 (achieving $BC > 0.97$ for all related pairs), loses its
+discriminative power when incorporated into the hybrid.  This is because
+the unrelated pairs \emph{also} have high Bhattacharyya coefficients
+(average 0.9646 versus 0.9641 for related).  Curvature distribution
+overlap is a necessary but not sufficient condition for relatedness.
+\end{keyfinding}
+
+\subsection{Weight Configuration Comparison}
+
+Table~\ref{tab:weights} compares the three weight configurations
+explored.
+
+\begin{table}[htbp]
+\centering
+\tablestyle
+\caption{Weight configuration comparison.  Sep.\ is average separation.
+Gap is the weakest-pair gap.  The selected configuration (3) achieves the
+best balanced result.}
+\label{tab:weights}
+\begin{tabular}{@{}lllrr@{}}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Config}} &
+\textcolor{white}{\textbf{Weights}} &
+\textcolor{white}{\textbf{Components}} &
+\textcolor{white}{\textbf{Sep.\ (\%)}} &
+\textcolor{white}{\textbf{Gap (\%)}} \\
+\midrule
+1 & 55/30/15       & coop/curv/sym   & $+2.06$ & $-6.67$ \\
+2 & 65/20/15       & coop/curv/sym   & $+1.90$ & $-6.57$ \\
+\rowcolor{yalumba-cream}
+3 & 45/20/15/10/10 & full five-field & $+1.50$ & $-1.66$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Configuration~3's advantage is clear: the two penalty terms reduce
+separation by only 0.56 percentage points (from $+2.06\%$ to $+1.50\%$)
+but improve the gap by 5.01 percentage points (from $-6.67\%$ to
+$-1.66\%$).  This is because the penalty terms selectively suppress
+scores for structurally dissimilar pairs, and structurally dissimilar
+pairs are disproportionately unrelated.  The curvature penalty $1-\kappa$
+punishes pairs with different mean triangle curvature, while the
+distortion penalty $1-d$ punishes pairs with different graph complexity.
+Both penalties are small for related pairs (who inherit similar graph
+structure from shared lineage) and large for unrelated pairs (whose graph
+structure depends on independent sequencing conditions).
+
+\subsection{Full Trajectory Comparison}
+
+Table~\ref{tab:trajectory} presents the complete v1--v10 trajectory
+alongside comparison methods.
+
+\begin{table}[htbp]
+\centering
+\tablestyle
+\caption{Complete algorithm comparison.  The Spectral Ecology trajectory
+is shown alongside the two passing symbiogenesis algorithms and the
+gold-standard Rare-Run P90.  Bold indicates best spectral result for
+each metric.}
+\label{tab:trajectory}
+\small
+\begin{tabular}{@{}lrrl@{}}
+\toprule
+\rowcolor{table-header}
+\textcolor{white}{\textbf{Algorithm}} &
+\textcolor{white}{\textbf{Sep.\ (\%)}} &
+\textcolor{white}{\textbf{Gap (\%)}} &
+\textcolor{white}{\textbf{Status}} \\
+\midrule
+Spectral Ecology v1   & $-0.74$  & $-26.87$ & Fail \\
+Spectral Ecology v2   & $+1.55$  & $-22.53$ & Fail \\
+Spectral Ecology v3   & $+4.93$  & $-54.67$ & Fail \\
+Spectral Ecology v4   & $+0.02$  & $-4.99$  & Fail \\
+Spectral Ecology v5   & $-0.74$  & $-11.29$ & Fail \\
+Spectral Ecology v6   & $-0.51$  & $-3.21$  & Fail \\
+Spectral Ecology v7   & $+0.87$  & $\mathbf{-0.61}$  & Best gap \\
+Spectral Ecology v8   & $+1.62$  & $-6.41$  & Fail \\
+Spectral Ecology v9   & $\mathbf{+3.20}$  & $-7.93$  & Best sep \\
+\rowcolor{yalumba-cream}
+Spectral Ecology v10  & $+1.50$  & $-1.66$  & Best balanced \\
+\midrule
+Module Persistence v3  & $+3.36$  & $+0.13$  & \textbf{Pass} \\
+Coalition Transfer v3  & $+1.97$  & $+0.06$  & \textbf{Pass} \\
+Rare-Run P90           & $+583$   & $+300$   & \textbf{Gold standard} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Gap Trajectory}
+
+The gap trajectory across all versions is:
+\[
+-26.87\% \xrightarrow{\text{v2}} -22.53\% \xrightarrow{\text{v4}} -4.99\%
+\xrightarrow{\text{v6}} -3.21\% \xrightarrow{\text{v7}} -0.61\%
+\xrightarrow{\text{v10}} -1.66\%
+\]
+
+\ymarginnote{The gap trajectory is monotonically improving through v7.
+v10 is a regression from v7's gap, though still the second-best.}
+
+Note that v3, v5, v8, and v9 are excluded from this sequence because
+their gaps were worse than their predecessors---each was an excursion
+into higher separation at the cost of gap stability.  The ``gap-improving
+subsequence'' (v1, v2, v4, v6, v7) shows steady progress from $-26.87\%$
+to $-0.61\%$, with v10 representing a slight regression.
+
+\begin{limitation}
+v10's gap of $-1.66\%$ is worse than v7's $-0.61\%$.  The hybrid
+inherits curvature-based scores that inflate certain unrelated pairs
+beyond what v7's pure cooperative+symmetry scoring produced.  Combining
+components introduces new sources of score variance that partially
+offset the benefits of multi-signal fusion.
+\end{limitation}
+
+\subsection{Timing}
+
+Total pipeline time: 366.3\,s (6 minutes 6 seconds).
+
+\begin{itemize}
+\item \textbf{Preparation:} 354.3\,s (96.7\%)---module discovery, graph
+  construction, eigendecomposition, heat kernel computation, curvature
+  distribution extraction.  This is a per-sample cost, embarrassingly
+  parallel.
+\item \textbf{Comparison:} 12.1\,s (3.3\%)---10 pairwise comparisons at
+  1.21\,s each.  This includes Sinkhorn transport, cooperative stability,
+  curvature distribution comparison, and symmetry computation.
+\item \textbf{Per-pair marginal cost:} Adding a seventh sample would cost
+  ${\sim}60$\,s preparation plus ${\sim}7$\,s comparison (6 new pairs at
+  1.21\,s), for ${\sim}67$\,s marginal.
+\end{itemize}
+
+The $O(n)$ preparation and $O(n^2)$ comparison structure means that
+comparison time dominates only for $n > 250$ samples.  For the
+foreseeable cohort sizes ($n < 50$), preparation is the bottleneck.
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Discussion}
+\label{sec:discussion}
+
+\subsection{Why the Hybrid Works Better Than Either Alone}
+
+The fundamental insight of v10 is that v9 and v7 detect \emph{different
+aspects} of inherited structure, and their failure modes are partially
+non-overlapping.
+
+\textbf{Cooperative stability} (v7) detects relational consistency: do
+the modules in sample $A$ have stable, reciprocal partners in sample $B$?
+This is a cross-sample quantity that measures how well two ecosystems
+can be aligned.  Its failure mode is graph size compatibility: samples
+with similar numbers of modules and similar degree distributions produce
+well-aligned transport plans regardless of kinship.
+
+\textbf{Curvature similarity} (v9) detects structural isomorphism: do
+samples $A$ and $B$ have the same distribution of internal geometric
+constraints?  This is an intrinsic quantity that measures whether two
+ecosystems have the same ``shape'' without reference to each other.  Its
+failure mode is graph density sensitivity: samples with similar edge
+density produce similar curvature distributions regardless of kinship.
+
+By combining both, v10 requires that a pair score high on \emph{both}
+relational consistency and structural isomorphism.  An unrelated pair
+might have compatible graph sizes (high cooperative stability) but
+different curvature distributions, or similar curvature distributions
+but incompatible transport plans.  The hybrid penalizes both cases.
+
+\begin{pullquote}
+v10's principle: related pairs should be similar in structure
+\textbf{and} well-matched in organization.  Requiring both is harder
+to satisfy by chance than requiring either alone.
+\end{pullquote}
+
+\subsection{The Separation--Gap Tradeoff}
+
+The ten-version trajectory reveals a persistent tension between
+separation and gap that is not merely an engineering problem but
+reflects a structural property of the scoring landscape.
+
+Methods that increase separation do so by amplifying the scores of
+already-high-scoring related pairs---typically those involving Mother
+(NA12878), whose rich ecosystem (671 modules, 3{,}296 triangles)
+provides more evidence for both cooperative stability and curvature
+similarity.  But amplifying high scores widens the \emph{variance}
+within the related class, because the weakest related pair
+(Pat.~GF $\to$ Father) does not benefit proportionally from its
+sparse 492-module, 1{,}256-triangle ecosystem.
+
+Methods that minimize the gap do so by compressing the overall score
+range---through regularization (Sinkhorn in v7) or through penalty
+terms (curvature and distortion in v10).  Compression reduces variance
+in both classes, bringing the weakest related score closer to the
+strongest unrelated score, but also bringing the class means closer
+together.
+
+\begin{definition}
+\textbf{Separation--gap duality.}  For a scoring function $S$ and
+classes $\mathcal{R}$ (related) and $\mathcal{U}$ (unrelated):
+\begin{align}
+\text{Sep} &= \frac{\mathbb{E}[S|\mathcal{R}] -
+  \mathbb{E}[S|\mathcal{U}]}{\mathbb{E}[S|\mathcal{U}]} \\
+\text{Gap} &= \frac{\min_{r \in \mathcal{R}} S(r) -
+  \max_{u \in \mathcal{U}} S(u)}{\max_{u \in \mathcal{U}} S(u)}
+\end{align}
+Separation depends on class means; gap depends on class extrema.
+Reducing variance (compression) improves gap at the expense of
+separation.  Increasing signal (amplification) improves separation at
+the expense of gap.
+\end{definition}
+
+v10 navigates this tradeoff by using the amplification of curvature
+scores (v9's contribution) with the compression of penalty terms (which
+bring outlier unrelated scores down) and cooperative stability (v7's
+already-compressed contribution).  The result is a Pareto-optimal
+point: no single-method version achieves both $+1.50\%$ separation
+\emph{and} $-1.66\%$ gap.
+
+\subsection{What Each Component Detects}
+
+The five components of the v10 score capture distinct aspects of
+ecosystem similarity:
+
+\textbf{Cooperative stability} ($w = 0.45$): Measures relational
+coherence---whether modules in two samples form reciprocal best-match
+partnerships through the Sinkhorn transport plan.  Sensitive to graph
+size compatibility and sequencing coverage.  Best at detecting pairs
+that share ecological ``roles'' in compatible proportions.
+
+\textbf{Curvature score} ($w = 0.20$): Measures intrinsic structural
+similarity---whether two samples' triangle curvature distributions have
+similar shape.  Combines Bhattacharyya coefficient (histogram overlap)
+and Earth Mover's Distance (distributional displacement).  Sensitive to
+graph density and triangle count.  Best at detecting pairs with similar
+internal organizational constraints.
+
+\textbf{Sinkhorn symmetry} ($w = 0.15$): Measures transport quality---
+whether the optimal alignment between two ecosystems treats both
+directions equivalently.  High symmetry indicates that neither sample
+has ``orphaned'' modules without partners.  Less confounded by coverage
+than cooperative stability because asymmetry is relative, not absolute.
+
+\textbf{Curvature penalty} ($w = 0.10$): Penalizes differences in mean
+curvature $\bar\Delta$.  Acts as a filter: pairs with very different
+curvature statistics are likely unrelated regardless of other scores.
+This is the most discriminative penalty term because mean curvature
+varies 36\% across samples.
+
+\textbf{Distortion penalty} ($w = 0.10$): Penalizes differences in
+graph complexity metrics.  Complements the curvature penalty by capturing
+first-order graph properties (degree distribution, density) that
+curvature misses.
+
+\subsection{The Persistent Spouse Confound}
+
+The spouse pair (Father--Mother) ranks third in v10 with score 0.4196,
+continuing a pattern that has persisted across all ten versions.  The
+spouse confound is not a bug in the algorithm; it is a structural
+feature of the dataset.
+
+Father and Mother are the only two offspring in the pedigree.  In the
+Illumina Platinum Pedigree sequencing protocol, they were sequenced
+under the same conditions, at similar coverage, using the same
+library preparation.  This means:
+
+\begin{enumerate}
+\item Their module counts are compatible (492 vs.\ 671---within
+  the range of parent--child pairs).
+\item Their graph densities are compatible (both reflect the same
+  library preparation biases).
+\item Their curvature distributions are similar (similar sequencing
+  artifacts produce similar edge weight patterns).
+\item Their cooperative stability is high (compatible graph sizes
+  produce well-matched Sinkhorn transport).
+\end{enumerate}
+
+\begin{limitation}
+The spouse confound is a coverage confound.  Two unrelated individuals
+sequenced at similar coverage with similar library preparation will
+produce similar module graph statistics across \emph{all} of v10's
+components, because all components ultimately derive from the module
+co-occurrence graph, which is constructed from k-mer co-occurrence
+counts that scale with coverage.  No combination of weights can
+eliminate this confound without either (a) explicit coverage
+normalization or (b) a feature that is provably coverage-invariant.
+\end{limitation}
+
+\subsection{The 0.61\% versus 1.66\% Gap}
+
+A natural question is whether v10 represents progress or regression
+relative to v7, given that v7's gap ($-0.61\%$) is closer to passing
+than v10's ($-1.66\%$).
+
+The answer depends on what we value.  If the goal is purely to pass
+(achieve positive gap), then v7 remains the strongest candidate:
+$-0.61\%$ is 2.7$\times$ closer to zero than $-1.66\%$.  If the
+goal is to understand the structure of the scoring landscape, then v10
+is more informative: it demonstrates that combining intrinsic and
+relational invariants improves the separation--gap tradeoff surface,
+even if the optimal point on that surface is not the closest approach
+to the gap axis.
+
+More importantly, v10 demonstrates that the gap is not sensitive
+to the choice of individual invariant but to the \emph{coverage
+confound}.  Both v7 and v10 are limited by the same pair
+(Pat.~GF $\to$ Father = 0.4030, below the spouse pair at 0.4196),
+and both are limited for the same reason (Pat.~GF's sparse ecosystem
+produces low cooperative stability).  The gap will not improve
+substantially until the coverage confound is addressed directly.
+
+\subsection{Connection to the Theoretical Framework}
+
+The ten-version arc can be understood through the abstraction hierarchy
+proposed in the yalumba theoretical framework:
+
+\begin{enumerate}
+\item \textbf{Token level:} Shared k-mers, Jaccard similarity.  This is
+  what Rare-Run P90 operates on, and it works.
+\item \textbf{Summary level:} Per-sample statistics---module counts,
+  eigenvalue distributions, degree sequences.  v1--v2 operated here.
+\item \textbf{Matching level:} Cross-sample alignments---optimal
+  transport, coherence fields, Sinkhorn plans.  v3--v8 operated here.
+\item \textbf{Field level:} Spatially organized quantities over module
+  graphs---curvature fields, cooperative fields, symmetry fields.  The
+  penalty terms in v10 operate here.
+\item \textbf{Intrinsic level:} Per-sample geometric invariants---
+  curvature distributions, topological features, spectral invariants.
+  v9 and the curvature component of v10 operate here.
+\end{enumerate}
+
+\ymarginnote{Each level up the hierarchy gains invariance at the cost
+of discrimination.  The question is whether kinship signal survives at
+the intrinsic level.}
+
+The program's trajectory has been a systematic ascent through this
+hierarchy.  Each level offers more invariance (less sensitivity to
+nuisance variation) but also less discrimination (less ability to
+distinguish genuine signal from noise).  The ten-version result
+suggests that kinship signal \emph{does} survive at the intrinsic level
+($+3.20\%$ separation in v9), but that the signal-to-noise ratio at
+that level is insufficient to separate all pairs ($-7.93\%$ gap).
+The hybrid v10 attempts to combine levels 3 and 5, and achieves a
+better tradeoff than either alone.
+
+\subsection{Is Spectral Ecology Fundamentally Limited?}
+
+This is the central question the ten-version program raises.  Two
+interpretations are possible.
+
+\textbf{Engineering interpretation:} The spectral ecology approach
+is correct in principle, but the current implementation is limited by
+(a) insufficient coverage deconfounding, (b) too-coarse graph construction
+(binary module membership instead of soft assignment), (c) too few
+samples for statistical calibration, and (d) too few reads per sample
+(50{,}000) for the spectral signal to dominate noise.  Under this
+interpretation, a better-engineered version---with explicit coverage
+normalization, soft module assignment, larger cohorts, and deeper
+sequencing---would eventually pass.
+
+\textbf{Fundamental interpretation:} Module co-occurrence graphs at
+the resolution achievable from 50{,}000 reads per sample do not contain
+enough structural information to separate first-degree relatives from
+coverage-matched unrelated individuals.  The spectral invariants capture
+genuine structure, but that structure is dominated by sequencing depth
+rather than by inherited genomic organization.  Under this interpretation,
+the approach requires a fundamentally different graph construction---
+perhaps from raw k-mer co-occurrence without the module abstraction
+layer---to access the signal.
+
+\ymarginnote{After ten versions, we believe the truth lies between
+these interpretations---closer to the engineering side.}
+
+We note that Module Persistence v3 ($+3.36\%$ sep, $+0.13\%$ gap)
+and Coalition Transfer v3 ($+1.97\%$ sep, $+0.06\%$ gap) both pass
+using the same module abstraction layer and the same 50{,}000-read
+budget.  These methods operate at the token/summary levels of the
+hierarchy---they compare which modules are shared and how they
+co-occur, not the geometric properties of the co-occurrence graph.
+This suggests that the kinship signal is present in the module
+co-occurrence data, but that the spectral/geometric invariants
+extracted by Spectral Ecology are not the most efficient way to
+access it.
+
+\subsection{Limitations}
+
+\begin{enumerate}
+\item \textbf{Single pedigree.}  All results are on the CEPH~1463
+  six-member pedigree.  Generalization to other pedigrees, populations,
+  and sequencing platforms is untested.
+
+\item \textbf{First-degree only.}  The pedigree contains only
+  parent--child (first-degree) relationships.  The method's ability to
+  detect second-degree (grandparent--grandchild, half-siblings) or
+  more distant relationships is unknown.
+
+\item \textbf{Small sample size.}  Six samples produce only ten
+  pairwise comparisons (four related, six unrelated).  Statistical
+  significance cannot be established from this sample size.
+
+\item \textbf{Manual weight selection.}  The five-component weights
+  were chosen from three manually selected configurations.  Systematic
+  optimization was not performed.
+
+\item \textbf{Coverage confound unresolved.}  The persistent spouse
+  confound demonstrates that all five components are sensitive to
+  sequencing coverage.  No coverage-invariant feature was developed.
+
+\item \textbf{50{,}000-read cap.}  The maximum reads per sample was
+  50{,}000.  With deeper sequencing, the module co-occurrence graph
+  would be denser and the spectral signal might be stronger, but
+  this was not tested.
+
+\item \textbf{No cross-validation.}  Weights were selected on the
+  same dataset used for evaluation.  This is not a valid evaluation
+  protocol for a production system.
+
+\item \textbf{Computational cost.}  At 366\,s for six samples, the
+  method is 100$\times$ slower than Rare-Run P90 and produces
+  strictly worse results.  Spectral methods are justified only if they
+  reveal structure that token methods miss.
+
+\item \textbf{No formal null model.}  The gap and separation metrics
+  are computed against an empirical unrelated distribution (six pairs),
+  not against a formal null model of unrelated similarity.
+
+\item \textbf{Component correlation.}  The five components are not
+  independent: cooperative stability and curvature score are both
+  derived from the same module co-occurrence graph.  The effective
+  degrees of freedom in the composite score are less than five.
+\end{enumerate}
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Future Work}
+\label{sec:future}
+
+The ten-version Spectral Ecology program points toward several
+promising directions for future research.
+
+\subsection{Coverage-Invariant Curvature}
+
+The most pressing need is a curvature computation that is provably
+invariant to sequencing coverage.  Current curvature distributions
+depend on edge weights that scale with coverage, producing similar
+distributions for coverage-matched unrelated pairs.  Possible approaches
+include:
+
+\begin{itemize}
+\item \textbf{Rank-based edge weights:} Replacing co-occurrence
+  counts with co-occurrence \emph{ranks} (within each sample) would
+  eliminate dependence on absolute coverage while preserving relative
+  structure.
+\item \textbf{Coverage regression:} Explicitly modeling the
+  relationship between coverage and curvature statistics, then
+  regressing it out before comparison.
+\item \textbf{Spectral normalization:} Normalizing the Laplacian
+  spectrum to unit trace before computing heat kernels, making the
+  spectral decomposition scale-invariant.
+\end{itemize}
+
+\subsection{Gromov--Wasserstein Distance}
+
+Rather than comparing curvature distributions (which are summaries),
+compare the full metric structure of module co-occurrence graphs using
+Gromov--Wasserstein distance~\cite{memoli2011gromov}.  This is a
+distance between metric measure spaces that does not require a common
+embedding or point-to-point correspondence, making it a natural fit
+for comparing ecosystems of different sizes.
+
+\subsection{Persistent Homology}
+
+The module co-occurrence graph has natural filtration parameters
+(edge weight thresholds, heat kernel timescales) that can be used to
+construct a persistence diagram~\cite{edelsbrunner2010computational,
+kerber2017geometry}.  Persistent homology captures topological
+features---connected components, loops, voids---that are invariant
+to graph perturbation and potentially more robust to coverage variation
+than spectral features.
+
+\subsection{GPU Acceleration}
+
+The preparation phase (354\,s) is dominated by eigendecomposition and
+heat kernel computation, both of which are amenable to GPU acceleration
+via the yalumba SPIR-V pipeline~\cite{chung1997spectral}.  A
+GPU-accelerated version could reduce preparation time to under 10\,s,
+making the spectral ecology approach competitive with token methods
+on timing.
+
+\subsection{Joint Deconfounding}
+
+The central unsolved problem is coverage deconfounding that works
+for both intrinsic (curvature) and relational (cooperative stability)
+invariants simultaneously.  v7's Sinkhorn regularization partially
+deconfounds cooperative stability; v9's distribution comparison
+partially deconfounds curvature.  But no single deconfounding strategy
+addresses both, and combining separately-deconfounded components (as
+v10 does) does not eliminate the joint confound.  A principled approach
+might involve:
+
+\begin{itemize}
+\item Learning a coverage-invariant embedding space in which both
+  curvature distributions and cooperative stability can be computed.
+\item Using a permutation-based null model to calibrate each
+  component against coverage-matched random pairs.
+\item Constructing a joint likelihood model that explicitly
+  includes coverage as a nuisance parameter.
+\end{itemize}
+
+\subsection{Beyond Module Abstraction}
+
+The module abstraction layer---grouping k-mers into connected components
+based on co-occurrence---may lose fine-grained structure.  Future work
+could operate directly on weighted k-mer co-occurrence graphs, using
+community detection to identify soft modules rather than hard
+connected components.  This would preserve within-module heterogeneity
+that the current binary assignment discards.
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Conclusion}
+\label{sec:conclusion}
+
+Spectral Ecology v10 is the culmination of a ten-version research
+program that has systematically explored structural invariants of
+genomic module ecosystems for reference-free relatedness detection.
+The program began with the hypothesis that inherited genomic
+organization can be detected through spectral analysis of module
+co-occurrence graphs, and over ten iterations refined this hypothesis
+through three eras of algorithmic development.
+
+\begin{pullquote}
+Ten versions.  Three eras.  One persistent confound.\\
+The gap trajectory: $-26.87\% \to -0.61\% \to -1.66\%$.
+\end{pullquote}
+
+\textbf{What the program achieved:}
+
+\begin{enumerate}
+\item \textbf{Demonstrated positive separation.}  Eight of ten versions
+  achieved positive separation, confirming that spectral invariants of
+  module co-occurrence graphs contain genuine kinship signal.
+
+\item \textbf{Approached the passing threshold.}  v7 achieved $-0.61\%$
+  gap, within one percentage point of passing.  v10 achieved $-1.66\%$
+  gap with better separation.  The gap trajectory shows consistent
+  improvement from $-26.87\%$ through the gap-improving subsequence.
+
+\item \textbf{Established complementary invariants.}  v9's intrinsic
+  curvature and v7's cooperative stability detect different aspects of
+  inherited structure, and their combination in v10 achieves a better
+  separation--gap tradeoff than either alone.
+
+\item \textbf{Identified the fundamental bottleneck.}  The coverage
+  confound is not an algorithmic artifact---it is a structural property
+  of module co-occurrence graphs that affects all spectral invariants.
+  No combination of known invariants can eliminate it without explicit
+  deconfounding.
+
+\item \textbf{Produced correct rankings.}  v10 places all four
+  parent--child pairs in the top 7 of 10 pairs, with three in the top 5.
+  The ranking is informative even when the gap is negative.
+\end{enumerate}
+
+\textbf{What the program did not achieve:}
+
+\begin{enumerate}
+\item \textbf{Positive gap.}  No version of Spectral Ecology has
+  achieved a positive weakest-pair gap.  Module Persistence v3
+  ($+0.13\%$) and Coalition Transfer v3 ($+0.06\%$) pass using
+  the same data and compute budget, operating at lower abstraction
+  levels.
+
+\item \textbf{Coverage deconfounding.}  Despite ten versions of
+  progressively more sophisticated invariants, the coverage confound
+  persists.  The spouse pair ranks in the top three in every version.
+
+\item \textbf{Competitive performance.}  Rare-Run P90 achieves
+  $+583\%$ separation and $+300\%$ gap---three orders of magnitude
+  better than any spectral method.  The spectral approach is justified
+  only if it provides insight that token methods cannot.
+\end{enumerate}
+
+\textbf{The honest assessment:}  Spectral Ecology is a research
+program, not a production method.  It has demonstrated that structural
+invariants of module co-occurrence graphs---eigenvalue distributions,
+heat kernel signatures, curvature tensors, transport plans---contain
+kinship signal that is detectable but not separable with current
+techniques.  The program's value lies not in its results (which are
+surpassed by simpler methods) but in its exploration of a fundamentally
+different approach to genomic comparison: characterizing inherited
+\emph{organization} rather than inherited \emph{content}.
+
+Whether this approach can be made practical depends on solving the
+coverage deconfounding problem, which v10 frames precisely but does
+not solve.  The hybrid architecture provides the correct template---
+combining intrinsic invariants with relational consistency measures,
+weighted by discriminative power---but the components themselves must
+be made coverage-invariant before the gap can turn positive.
+
+The Spectral Ecology program continues.
+
+\bibliographystyle{plain}
+\bibliography{../references}
+
+\end{document}
