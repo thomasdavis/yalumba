@@ -52,3 +52,7 @@ export type { CoherenceFieldResult } from "./coherence-field.js";
 // v5: Multi-scale symbiogenetic field curvature
 export { extractMultiScalePatches, solveMultiScaleField } from "./multiscale-field.js";
 export type { MultiScalePatches, MultiScaleFieldResult } from "./multiscale-field.js";
+
+// v6: Symbiogenetic persistence fields
+export { solvePersistenceField } from "./persistence-field.js";
+export type { PersistenceFieldResult } from "./persistence-field.js";
