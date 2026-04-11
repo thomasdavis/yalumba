@@ -60,3 +60,7 @@ export type { PersistenceFieldResult } from "./persistence-field.js";
 // v8: Holonomy-based curvature invariants
 export { findTriangles, computeHolonomy, compareCurvatureDistributions } from "./holonomy.js";
 export type { HolonomyResult } from "./holonomy.js";
+
+// v9: Constraint compatibility tensor (intrinsic curvature)
+export { computeCurvatureProfile, compareCurvatureProfiles } from "./curvature-tensor.js";
+export type { CurvatureProfile } from "./curvature-tensor.js";

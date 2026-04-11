@@ -14,6 +14,7 @@ import { coalitionTransfer } from "./algorithms/coalition-transfer.js";
 import { moduleStability } from "./algorithms/module-stability.js";
 import { spectralEcology } from "./algorithms/spectral-ecology.js";
 import { spectralEcologyV8 } from "./algorithms/spectral-ecology-v8.js";
+import { spectralEcologyV9 } from "./algorithms/spectral-ecology-v9.js";
 
 const ALGORITHMS: Record<string, SymbioAlgorithm> = {
   "module-persistence": modulePersistence,
@@ -21,6 +22,7 @@ const ALGORITHMS: Record<string, SymbioAlgorithm> = {
   "module-stability": moduleStability,
   "spectral-ecology": spectralEcology,
   "spectral-ecology-v8": spectralEcologyV8,
+  "spectral-ecology-v9": spectralEcologyV9,
 };
 
 const ROOT = join(import.meta.dir, "../../../");
