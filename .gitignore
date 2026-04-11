@@ -52,3 +52,4 @@ data/*/report.md
 
 # next.js
 .next/
+apps/docs/out/

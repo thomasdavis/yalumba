@@ -22,6 +22,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <a href="/results" className="hover:text-[var(--color-text)] transition-colors">results</a>
               <a href="/packages" className="hover:text-[var(--color-text)] transition-colors">packages</a>
               <a href="/reports" className="hover:text-[var(--color-text)] transition-colors">reports</a>
+              <a href="/audit" className="hover:text-[var(--color-text)] transition-colors">audit</a>
             </div>
           </div>
         </nav>

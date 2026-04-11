@@ -13,6 +13,7 @@ export type {
 // Extraction
 export { extractMotifs, extractMotifsWithPositions } from "./motif-extractor.js";
 export { buildModules } from "./module-builder.js";
+export { buildModulesCanonical } from "./canonical-builder.js";
 export { buildModuleGraph } from "./module-graph.js";
 export { detectBoundaries, buildBoundaryProfile } from "./boundary-detector.js";
 export { findCoalitions } from "./coalition-finder.js";
