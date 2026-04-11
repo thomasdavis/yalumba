@@ -12,11 +12,13 @@ import type { SymbioAlgorithm, SampleReads, DatasetDef, PairResult } from "./typ
 import { modulePersistence } from "./algorithms/module-persistence.js";
 import { coalitionTransfer } from "./algorithms/coalition-transfer.js";
 import { moduleStability } from "./algorithms/module-stability.js";
+import { spectralEcology } from "./algorithms/spectral-ecology.js";
 
 const ALGORITHMS: Record<string, SymbioAlgorithm> = {
   "module-persistence": modulePersistence,
   "coalition-transfer": coalitionTransfer,
   "module-stability": moduleStability,
+  "spectral-ecology": spectralEcology,
 };
 
 const ROOT = join(import.meta.dir, "../../../");

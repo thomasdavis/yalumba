@@ -1,7 +1,7 @@
 {
-  "name": "@yalumba/symbiogenesis",
+  "name": "@yalumba/ecology",
   "version": "0.0.1",
-  "description": "Symbiogenesis-native relatedness detection — module graphs, coalition transfer, boundary conservation",
+  "description": "Spectral ecosystem inference — heat kernel signatures, ecological role assignment, multi-scale comparison",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -20,8 +20,6 @@
   },
   "dependencies": {
     "@yalumba/modules": "workspace:*",
-    "@yalumba/math": "workspace:*",
-    "@yalumba/ecology": "workspace:*",
-    "@yalumba/fastq": "workspace:*"
+    "@yalumba/math": "workspace:*"
   }
 }

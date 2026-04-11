@@ -1,5 +1,6 @@
 {
   "lockfileVersion": 1,
+  "configVersion": 0,
   "workspaces": {
     "": {
       "name": "yalumba",
@@ -84,6 +85,14 @@
         "@yalumba/math": "workspace:*",
       },
     },
+    "packages/ecology": {
+      "name": "@yalumba/ecology",
+      "version": "0.0.1",
+      "dependencies": {
+        "@yalumba/math": "workspace:*",
+        "@yalumba/modules": "workspace:*",
+      },
+    },
     "packages/fastq": {
       "name": "@yalumba/fastq",
       "version": "0.0.1",
@@ -152,6 +161,7 @@
       "name": "@yalumba/symbiogenesis",
       "version": "0.0.1",
       "dependencies": {
+        "@yalumba/ecology": "workspace:*",
         "@yalumba/fastq": "workspace:*",
         "@yalumba/math": "workspace:*",
         "@yalumba/modules": "workspace:*",
@@ -311,6 +321,8 @@
     "@yalumba/compute": ["@yalumba/compute@workspace:packages/compute"],
 
     "@yalumba/docs": ["@yalumba/docs@workspace:apps/docs"],
+
+    "@yalumba/ecology": ["@yalumba/ecology@workspace:packages/ecology"],
 
     "@yalumba/fastq": ["@yalumba/fastq@workspace:packages/fastq"],
 

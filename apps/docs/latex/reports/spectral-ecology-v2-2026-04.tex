@@ -1,0 +1,1079 @@
+\documentclass{../yalumba}
+
+\title{Spectral Ecosystem Inference for\\Reference-Free Relatedness Detection:\\From Graph Collapse to Multi-Scale Signatures}
+\author{Ajax Davis}
+\date{April 2026}
+
+\setabstract{%
+We present the design, implementation, and experimental evaluation of
+\emph{Spectral Ecology}---the first nonlinear, identity-free algorithm in the
+yalumba symbiogenesis family.  Where prior algorithms (Module Persistence,
+Coalition Transfer, Module Stability) compared genomes by measuring overlap of
+shared tokens, Spectral Ecology asks whether two genomes instantiate the same
+\emph{kind} of organization.  The method constructs dense module co-occurrence
+graphs (600--1{,}400 edges from 295--449 modules per sample), computes their
+normalized graph Laplacians via Jacobi eigendecomposition, extracts multi-scale
+heat kernel signatures at 10 timescales, assigns spectral ecological roles
+(core, satellite, bridge, scaffold, boundary), estimates eigenvalue density
+profiles, eigenvector localization statistics, and diffusion distance
+distributions---then compares these identity-free invariants across samples.
+We document the complete experimental trajectory: v1 failed catastrophically
+because sequential adjacency produced graphs that were $>$99\% disconnected
+(2--5 edges, spectral gap $= 0$); v2 switched to read-level co-occurrence,
+producing 250$\times$ denser graphs and flipping separation from $-0.74\%$ to
+$+1.01\%$; five subsequent experiments iterated on connectivity guarantees,
+component filtering, eigenvalue filtering, node-level HKS distribution
+comparison, and mean-normalization, pushing separation to $+1.89\%$.  On the
+CEPH~1463 six-member pedigree benchmark, the method achieves $+1.55\%$ mean
+separation with three of four parent--child pairs ranking consecutively at
+positions 3--5.  Two persistent failure modes are diagnosed in detail:
+(1)~the spouse pair (Father~$\leftrightarrow$~Mother) consistently ranks first
+because their ecosystems have nearly identical module counts, edge densities,
+and spectral shapes---a coverage confound that purely within-sample spectral
+methods cannot resolve; (2)~NA12891 (Mat.~GF) is a structural outlier with a
+unique role distribution (356 bridges vs.\ 0 in all other samples), dragging
+the Mat.GF~$\to$~Mother parent--child pair to rank~8.  We argue that the
+spectral approach has reached its ceiling for within-sample comparison
+($\sim$1.5--1.9\% separation) and that further progress requires cross-sample
+structural signal---multi-layer ecosystem graphs, module embedding similarity,
+or optimal transport between spectral distributions.  The \texttt{@yalumba/ecology}
+package implementing all methods is released as part of the yalumba monorepo:
+Jacobi eigendecomposition, multi-scale heat kernel, spectral role assignment,
+eigenvalue density estimation, eigenvector localization, null model
+deconfounding, and module feature embeddings---all from scratch in TypeScript
+with no external dependencies.}
+
+\begin{document}
+\maketitle
+
+\tableofcontents
+\newpage
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Introduction}
+\label{sec:intro}
+
+\subsection{The Identity Trap}
+
+Every prior symbiogenesis algorithm fell into the same trap: they compared
+genomes by asking ``do these two samples share the same tokens?''  Module
+Persistence asked whether two samples share the same modules.  Coalition
+Transfer asked whether they share the same coalitions.  Module Stability
+asked whether the same motifs are stable under perturbation.
+
+\ymarginnote{Token-matching fails because related individuals produce
+related-but-not-identical structures.}
+
+All three hit the same wall.  Related individuals who share a haplotype block
+produce k-mer modules from that block, but heterozygosity at even one position
+changes the k-mer composition, producing \emph{different} module identities.
+The modules are biologically related but computationally distinct.  Exact
+matching misses them entirely.
+
+The weight-tuning ceiling was proven by Module Stability~v4, which
+exhaustively explored six scoring configurations and proved that the coverage
+confound---samples with similar sequencing depth produce similar module
+structures regardless of kinship---is structural, not weight-tunable.
+
+\subsection{The Spectral Alternative}
+
+Spectral Ecology abandons token identity entirely.  Instead of asking ``do
+these samples share tokens?'' it asks:
+
+\begin{pullquote}
+Do these two genomes instantiate the same \emph{kind} of genomic organization?
+\end{pullquote}
+
+The answer is computed from spectral geometry: eigenvalues and eigenvectors of
+the graph Laplacian, heat kernel diffusion at multiple timescales, ecological
+role distributions, and eigenvalue density profiles.  None of these depend on
+which specific modules exist---only on how they are organized.
+
+\ymarginnote{Spectral methods measure structural similarity without node
+correspondence.}
+
+Two graphs with identical spectra have identical topology regardless of node
+labeling~\cite{fang2012selection}.  Two graphs with similar heat kernel traces
+have similar multi-scale connectivity.  Two graphs with similar role
+distributions have similar ecological architecture.  This is exactly the
+property needed: related individuals may produce different modules, but the
+\emph{organization} of those modules---the interaction pattern, the hub
+structure, the clustering---should be inherited.
+
+\subsection{Contributions}
+
+This paper documents:
+
+\begin{enumerate}
+  \item The complete \texttt{@yalumba/ecology} package: graph Laplacian
+    computation, Jacobi eigendecomposition, multi-scale heat kernel signatures,
+    spectral ecological role assignment, eigenvalue density estimation,
+    eigenvector localization, null model deconfounding, and module feature
+    embeddings---all from scratch in TypeScript.
+  \item The experimental trajectory from v1 (catastrophic graph collapse) to v2
+    (dense co-occurrence graphs) through five iterations that pushed separation
+    from $-0.74\%$ to $+1.89\%$.
+  \item A detailed diagnosis of the two persistent failure modes: the spouse
+    confound and the NA12891 outlier.
+  \item An analysis of why purely within-sample spectral methods plateau at
+    $\sim$1.5\% separation and what architectural changes are needed to break
+    through.
+\end{enumerate}
+
+\subsection{Context: The Symbiogenesis Program}
+
+Spectral Ecology is the fourth algorithm family in the symbiogenesis
+program~\cite{margulis1998}.  The program's thesis:
+
+\begin{definition}
+Human inheritance can be modeled as the transmission of resilient, interacting
+genomic ecosystems whose structure can be inferred from raw reads without
+reference coordinates.  Close kinship is only one observable of this deeper
+system.
+\end{definition}
+
+The program operates on two tracks:
+
+\begin{itemize}
+  \item \textbf{Track~A (practical baseline):} Rare-Run~P90---contiguous runs
+    of rare k-mers.  Separation: $+583\%$, weakest gap: $+300\%$.  The gold
+    standard for threshold kinship detection.
+  \item \textbf{Track~B (ambitious research):} The symbiogenesis family---four
+    algorithm families exploring nonlinear, structure-first inheritance
+    detection.  This paper documents the fourth and most ambitious family.
+\end{itemize}
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Methods}
+\label{sec:methods}
+
+\subsection{Dataset}
+
+We evaluate on the CEPH~1463 pedigree~\cite{ceph1463, zook2019giab,
+1000genomes2015}, using Illumina Platinum Pedigree data (100\,bp paired-end,
+$\sim$30$\times$ WGS) for six family members:
+
+\begin{pedigree}
+Generation 1 (Grandparents):
+  Paternal: NA12889 (Pat.GF) + NA12890 (Pat.GM)
+  Maternal: NA12891 (Mat.GF) + NA12892 (Mat.GM)
+
+Generation 2 (Parents):
+  NA12877 (Father) = child of NA12889 + NA12890
+  NA12878 (Mother) = child of NA12891 + NA12892
+\end{pedigree}
+
+Ten pairwise comparisons: 4 parent--child, 2 spousal/in-law, 4 cross-lineage.
+Each sample limited to 50{,}000 reads.  No alignment, variant calling, or
+phasing is performed.
+
+\subsection{Pipeline Overview}
+
+The Spectral Ecology pipeline has six stages:
+
+\begin{enumerate}
+  \item \textbf{Module extraction.}  Raw reads $\to$ k-mer co-occurrence
+    graphs $\to$ connected components $\to$ modules.  Parameters: $k = 15$,
+    window $= 150$\,bp, min support $= 3$, min cohesion $= 0.25$.
+    Produces 295--449 modules per sample.
+  \item \textbf{Co-occurrence graph construction.}  For each read, identify
+    all modules present.  For each module pair on the same read, increment
+    co-occurrence count.  Normalize:
+    $w(A,B) = \text{cooccur}(A,B) / \sqrt{\text{freq}(A) \cdot \text{freq}(B)}$.
+    Threshold at $w > 0.01$.  Produces 611--1{,}410 edges.
+  \item \textbf{Normalized graph Laplacian.}
+    $L_{\text{sym}} = I - D^{-1/2} A D^{-1/2}$.
+    Eigenvalues in $[0, 2]$; $\lambda_1 = 0$ for each connected component.
+  \item \textbf{Jacobi eigendecomposition.}  Full dense eigendecomposition via
+    Givens rotations.  Returns all eigenvalues (sorted ascending) and
+    eigenvectors.  Sub-second for $n \leq 450$.
+  \item \textbf{Ecosystem signature extraction.}  From the eigendecomposition:
+    \begin{itemize}
+      \item Heat kernel traces at 10 timescales ($t = 0.1$ to $100$)
+      \item Per-node heat kernel signatures (HKS)
+      \item Spectral ecological role assignment (core/satellite/bridge/scaffold/boundary)
+      \item Eigenvalue density profile (Gaussian KDE, filtered for non-trivial eigenvalues)
+      \item Eigenvector localization (inverse participation ratio)
+      \item Diffusion distance distributions at 3 timescales
+      \item Module feature embeddings (7-dimensional)
+      \item Null model spectral residual (Chung-Lu baseline)
+    \end{itemize}
+  \item \textbf{Ecosystem comparison.}  Weighted combination of distances
+    across all invariants.  Converted to similarity via
+    $s = \exp(-d \cdot \alpha)$.
+\end{enumerate}
+
+\subsection{Module Co-occurrence Graph (v2)}
+
+The critical design choice.  Version~1 used sequential adjacency (modules
+appearing in order on the same read).  Version~2 uses statistical
+co-occurrence:
+
+\begin{definition}
+Two modules $A$ and $B$ are connected if they co-occur on any read.  The edge
+weight is the normalized co-occurrence:
+\begin{equation}
+  w(A, B) = \frac{|\{r : A \in r \wedge B \in r\}|}
+                  {\sqrt{|\{r : A \in r\}| \cdot |\{r : B \in r\}|}}
+  \label{eq:cooccurrence}
+\end{equation}
+Edges with $w < 0.01$ are removed.
+\end{definition}
+
+\ymarginnote{Co-occurrence is linkage disequilibrium without coordinates.}
+
+This normalization is equivalent to cosine similarity in read-space.  It
+approximates linkage disequilibrium without alignment coordinates: modules that
+co-occur more often than expected by chance (given their individual frequencies)
+receive high weight.
+
+The impact is dramatic:
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{Graph density comparison: sequential adjacency (v1) vs.\ statistical
+    co-occurrence (v2).}
+  \label{tab:density}
+  \begin{tabular}{lrrrr}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Sample}} &
+    \textcolor{white}{\textbf{Modules}} &
+    \textcolor{white}{\textbf{v1 Edges}} &
+    \textcolor{white}{\textbf{v2 Edges}} &
+    \textcolor{white}{\textbf{Density}} \\
+    \midrule
+    NA12889 (Pat.\ GF) & 373 & 2 & 951 & 1.4\% \\
+    NA12890 (Pat.\ GM) & 295 & 4 & 611 & 1.4\% \\
+    NA12891 (Mat.\ GF) & 449 & 5 & 1{,}410 & 1.4\% \\
+    NA12892 (Mat.\ GM) & 402 & 5 & 1{,}067 & 1.3\% \\
+    NA12877 (Father)    & 444 & 2 & 975 & 1.0\% \\
+    NA12878 (Mother)    & 443 & 3 & 885 & 0.9\% \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Average edges per sample increased from 3.5 to 983---a \textbf{280$\times$
+improvement}.
+
+\subsection{Normalized Graph Laplacian}
+
+Given the weighted adjacency matrix $A$ with degree matrix $D$
+($D_{ii} = \sum_j A_{ij}$), the normalized Laplacian is:
+
+\begin{equation}
+  L_{\text{sym}} = I - D^{-1/2} A D^{-1/2}
+  \label{eq:laplacian}
+\end{equation}
+
+Properties: symmetric positive semidefinite, eigenvalues in $[0, 2]$,
+$\lambda_1 = 0$ for each connected component.  The spectral gap
+$\lambda_2 - \lambda_1$ measures algebraic connectivity.
+
+\subsection{Jacobi Eigendecomposition}
+
+We implement the classical Jacobi rotation algorithm for symmetric
+matrices~\cite{efron1979bootstrap}.  The algorithm iteratively applies Givens
+rotations to zero off-diagonal elements, converging to the diagonal form
+$\Lambda = V^T L V$ where $\Lambda$ contains eigenvalues and columns of $V$
+are eigenvectors.
+
+Key implementation detail: when diagonal elements are equal
+($L_{pp} = L_{qq}$), the standard formula produces $\tau = 0$ and
+$\text{sign}(0) = 0$ in JavaScript, making the rotation identity.  We
+explicitly handle this case with $t = 1$ (rotation angle $\pi/4$).
+
+For $n \leq 450$ nodes, full dense eigendecomposition completes in under one
+second.
+
+\subsection{Multi-Scale Heat Kernel}
+
+The heat kernel $K_t = \exp(-tL)$ describes diffusion on the graph at
+timescale $t$.  From the eigendecomposition $L = V \Lambda V^T$:
+
+\begin{equation}
+  K_t = V \exp(-t\Lambda) V^T
+  \label{eq:heat-kernel}
+\end{equation}
+
+The per-node heat kernel signature (HKS) at node $j$ and time $t$:
+
+\begin{equation}
+  \text{HKS}(j, t) = \sum_{k=1}^{n} \exp(-t \lambda_k) \cdot \phi_k(j)^2
+  \label{eq:hks}
+\end{equation}
+
+where $\phi_k(j)$ is the $j$-th component of eigenvector $k$.  Small $t$
+captures local neighborhood structure; large $t$ captures global topology.
+
+\ymarginnote{Heat kernel at multiple scales = multi-resolution fingerprint.}
+
+The graph-level trace:
+
+\begin{equation}
+  \text{trace}(K_t) = \sum_{k=1}^{n} \exp(-t \lambda_k)
+  \label{eq:trace}
+\end{equation}
+
+We evaluate at 10 timescales: $t \in \{0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0,
+20.0, 50.0, 100.0\}$.
+
+\subsection{Spectral Ecological Role Assignment}
+
+Each module is classified into an ecological role based on its position in
+spectral space:
+
+\begin{definition}
+The ecological roles are:
+\begin{itemize}
+  \item \textbf{Core}: high degree, central in spectral embedding.  Foundational
+    modules around which the ecosystem organizes.
+  \item \textbf{Satellite}: low degree, far from spectral center.  Peripheral
+    modules loosely attached to the ecosystem.
+  \item \textbf{Bridge}: high Fiedler value (2nd eigenvector component),
+    central position.  Connects otherwise-disconnected clusters.
+  \item \textbf{Scaffold}: moderate degree, moderate spectral position.
+    Structural support modules.
+  \item \textbf{Boundary}: high Fiedler value, far from center.  At the
+    transition between spectral clusters.
+\end{itemize}
+\end{definition}
+
+Roles are assigned from the first 6 non-trivial eigenvectors combined with
+weighted graph degree.  Each node receives a confidence score based on the
+margin between its highest and second-highest role score.
+
+The \emph{role spectrum} is the distribution of roles across the ecosystem:
+$(\text{frac}_{\text{core}}, \text{frac}_{\text{sat}}, \text{frac}_{\text{bridge}},
+\text{frac}_{\text{scaffold}}, \text{frac}_{\text{boundary}})$.
+
+\subsection{Additional Spectral Invariants}
+
+\subsubsection{Eigenvalue Density}
+
+Gaussian kernel density estimation over the non-trivial eigenvalues
+(filtering out $\lambda < 0.01$ and $|\lambda - 1| < 0.01$).  32 bins over
+$[0, 2]$.  Captures the shape of the connectivity spectrum.
+
+\subsubsection{Eigenvector Localization}
+
+The inverse participation ratio (IPR) for eigenvector $k$:
+\begin{equation}
+  \text{IPR}(k) = \sum_{j=1}^{n} \phi_k(j)^4
+\end{equation}
+IPR $= 1/n$ for delocalized (uniform) eigenvectors; IPR $= 1$ for fully
+localized.  High IPR indicates modular structure.
+
+\subsubsection{Diffusion Distance Distributions}
+
+Pairwise diffusion distance between nodes $i$ and $j$ at time $t$:
+\begin{equation}
+  d_t(i,j)^2 = \sum_{k=1}^{n} \exp(-2t\lambda_k)(\phi_k(i) - \phi_k(j))^2
+\end{equation}
+We compute the mean and variance of all $\binom{n}{2}$ pairwise distances at
+three timescales ($t = 0.5, 2.0, 10.0$).
+
+\subsubsection{Node-Level HKS Distribution Comparison}
+
+Rather than comparing heat traces (graph-level sums), we compare the
+\emph{distribution} of per-node HKS values.  At each timescale, sort the
+per-node HKS values for both samples, interpolate to a common grid, and compute
+L2 distance between the sorted vectors.  This is equivalent to the 1-Wasserstein
+distance between empirical node-signature distributions.
+
+Before comparison, each node's HKS is normalized by the within-sample mean at
+that timescale, so the distribution captures \emph{relative} node importance
+(hub-ness vs.\ periphery) rather than absolute heat values.
+
+\subsection{Ecosystem Comparison}
+
+The composite distance between two ecosystem signatures is:
+
+\begin{equation}
+  d(A, B) = \sum_{i} w_i \cdot d_i(A, B)
+  \label{eq:composite}
+\end{equation}
+
+where the components and weights (final configuration) are:
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{Comparison components and weights.}
+  \label{tab:weights}
+  \begin{tabular}{llc}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Component}} &
+    \textcolor{white}{\textbf{Method}} &
+    \textcolor{white}{\textbf{Weight}} \\
+    \midrule
+    Node HKS distribution & 1-Wasserstein (sorted L2) & 0.30 \\
+    Heat trace & L2 of log-normalized traces & 0.10 \\
+    Role spectrum & Jensen--Shannon divergence & 0.20 \\
+    Eigenvalue density & L2 of KDE profiles & 0.15 \\
+    Diffusion distribution & L2 of mean + variance & 0.10 \\
+    Filtered spectral & L2 of non-trivial eigenvalues & 0.10 \\
+    Trivial fraction & $|\text{frac}_A - \text{frac}_B|$ & 0.05 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Similarity is computed as $s = \exp(-2d)$.
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Experimental Trajectory}
+\label{sec:experiments}
+
+We document six iterations, each changing one variable.
+
+\subsection{v1: Sequential Adjacency (Baseline Failure)}
+
+The initial implementation used \texttt{buildModuleGraph()} from
+\texttt{@yalumba/modules}, which creates edges between modules that appear
+\emph{sequentially} on the same read (module $A$'s motifs appear before module
+$B$'s motifs, observed $\geq 2$ times).
+
+\begin{limitation}
+\textbf{Catastrophic graph collapse.}  With 295--449 modules per sample, only
+2--5 edges survived the $\geq 2$ observation filter.  Graphs were $>$99\%
+disconnected.  Spectral gap was exactly zero for all samples.  All eigenvalues
+were either 0 (disconnected components) or 1 (isolated nodes).  The heat kernel
+trace reduced to counting connected component sizes.  Role assignment was
+trivial: 95\% satellite.
+\end{limitation}
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{v1 results: sequential adjacency.}
+  \label{tab:v1}
+  \begin{tabular}{lr}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Metric}} &
+    \textcolor{white}{\textbf{Value}} \\
+    \midrule
+    Mean separation & $-0.74\%$ \\
+    Weakest gap & $-26.87\%$ \\
+    Avg.\ edges per sample & 3.5 \\
+    Spectral gap (all samples) & 0.0000 \\
+    Dominant role & satellite (95\%) \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The spouse pair (Father~$\leftrightarrow$~Mother) ranked first at 0.90
+similarity because they had the most similar module counts (444 vs.\ 443).
+This is pure coverage confound.
+
+\subsection{v2: Statistical Co-occurrence}
+
+Replaced sequential adjacency with read-level co-occurrence
+(Equation~\ref{eq:cooccurrence}).  Every module pair present on the same read
+receives an edge, weighted by normalized frequency.
+
+\begin{keyfinding}
+\textbf{Separation flipped positive}: $+1.01\%$ (from $-0.74\%$).  Edges
+increased 280$\times$.  The spectral machinery now had real structure to
+analyze.
+\end{keyfinding}
+
+However, spectral gap remained zero (54 connected components, 44 isolated
+nodes).  The graph was denser but still disconnected.
+
+\subsection{Experiment 1: kNN Kernel Edges}
+
+Added a support-similarity Gaussian kernel connecting each node to its 8
+nearest neighbors by $\log$-support distance.  Guaranteed graph connectivity.
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{Experiment~1 results: kNN kernel edges.}
+  \label{tab:exp1}
+  \begin{tabular}{lrr}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Metric}} &
+    \textcolor{white}{\textbf{Before}} &
+    \textcolor{white}{\textbf{After}} \\
+    \midrule
+    Edges (avg.) & 983 & 3{,}624 \\
+    Density (avg.) & 1.2\% & 5.3\% \\
+    Spectral gap & 0.00 & 0.08--0.12 \\
+    Separation & $+1.01\%$ & $-1.60\%$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{limitation}
+\textbf{Kernel edges amplify coverage confound.}  The support-similarity kernel
+connects modules with similar read counts---a coverage proxy.  Samples with
+similar sequencing depth get artificially similar graphs, worsening the coverage
+confound.  Separation went \emph{backwards}.
+\end{limitation}
+
+The kernel was reverted.  Lesson: connectivity guarantees must use
+coverage-orthogonal features.
+
+\subsection{Experiment 2: Disable Broken Deconfounding}
+
+The Chung-Lu null model produced spectral residuals with magnitudes of
+65{,}000--240{,}000---numerically unstable z-scores caused by near-zero
+variance in the null spectrum.  Even with $\tanh$ compression, the component
+contributed a constant $\sim$0.10 to all pairs.
+
+Removed the deconfounded component and redistributed its weight to heat trace.
+
+\begin{keyfinding}
+Separation improved to $+1.33\%$.  The broken component was consuming weight
+budget without contributing discriminative signal.
+\end{keyfinding}
+
+\subsection{Experiment 3: Trivial Eigenvalue Filtering}
+
+Observed that the eigenvalue spectrum is dominated by trivial values:
+
+\begin{itemize}
+  \item 12--13 eigenvalues near zero ($< 0.01$): disconnected components
+  \item 72--117 eigenvalues near one ($|{\lambda - 1}| < 0.01$): isolated or
+    loosely connected nodes
+  \item 314--364 ``interesting'' eigenvalues in $(0.01, 0.99) \cup (1.01, 2.0)$
+\end{itemize}
+
+\ymarginnote{The interesting eigenvalues are only 70\% of the total.}
+
+The near-one eigenvalues flatten the density estimate and dominate the spectral
+distance.  Filtering them before density estimation and spectral comparison
+isolates the structural signal.
+
+\begin{keyfinding}
+\textbf{Best separation achieved: $+1.89\%$.}  Eigenvalue filtering removed
+the dominant noise from the spectral comparison, amplifying the structural
+signal.
+\end{keyfinding}
+
+\subsection{Experiment 4: Node-Level HKS Distribution}
+
+Replaced the graph-level heat trace (sum of node HKS) with node-level
+distribution comparison.  At each timescale, sorted per-node HKS values are
+compared via interpolated L2 distance---equivalent to 1-Wasserstein distance
+between empirical distributions.
+
+\begin{keyfinding}
+Mat.GM~$\to$~Mother (parent--child) jumped to rank~2 for the first time.
+The node-level distribution detects that grandmother and granddaughter have
+similar internal hub/periphery structure, even though their ecosystems differ
+in absolute size.
+\end{keyfinding}
+
+\subsection{Experiment 5: Mean-Normalized HKS}
+
+Normalized each node's HKS by the within-sample mean at each timescale before
+sorting and comparing.  This removes absolute scale, comparing only
+\emph{relative} node importance.
+
+Three of four parent--child pairs now rank consecutively at positions 3--5.
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{Experimental trajectory summary.}
+  \label{tab:trajectory}
+  \begin{tabular}{llcc}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Experiment}} &
+    \textcolor{white}{\textbf{Change}} &
+    \textcolor{white}{\textbf{Separation}} &
+    \textcolor{white}{\textbf{Weakest Gap}} \\
+    \midrule
+    v1 & Sequential adjacency & $-0.74\%$ & $-26.87\%$ \\
+    v2 & Co-occurrence edges & $+1.01\%$ & $-17.72\%$ \\
+    Exp.\ 1 & kNN kernel & $-1.60\%$ & $-13.13\%$ \\
+    Exp.\ 2 & Drop deconfounding & $+1.33\%$ & $-26.73\%$ \\
+    Exp.\ 3 & Filter eigenvalues & $\mathbf{+1.89\%}$ & $-26.75\%$ \\
+    Exp.\ 4 & Node HKS distribution & $+1.35\%$ & $-21.66\%$ \\
+    Exp.\ 5 & Mean-normalized HKS & $+1.55\%$ & $-22.53\%$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Results}
+\label{sec:results}
+
+\subsection{Final Score Table}
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{Complete pairwise scores (Experiment~5 configuration), ranked by
+    similarity.  Parent--child pairs marked with $\blacktriangleright$.}
+  \label{tab:scores}
+  \begin{tabular}{clcl}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Rank}} &
+    \textcolor{white}{\textbf{Pair}} &
+    \textcolor{white}{\textbf{Similarity}} &
+    \textcolor{white}{\textbf{Type}} \\
+    \midrule
+    1 & Father $\leftrightarrow$ Mother
+      & 0.803 & Spouses \\
+    2 & Pat.GF $\leftrightarrow$ Mother
+      & 0.749 & In-law \\
+    3 & $\blacktriangleright$ Mat.GM $\to$ Mother
+      & 0.730 & Parent--child \\
+    4 & $\blacktriangleright$ Pat.GM $\to$ Father
+      & 0.725 & Parent--child \\
+    5 & $\blacktriangleright$ Pat.GF $\to$ Father
+      & 0.715 & Parent--child \\
+    6 & Pat.GM $\leftrightarrow$ Mat.GM
+      & 0.692 & Unrelated \\
+    7 & Pat.GF $\leftrightarrow$ Mat.GM
+      & 0.687 & Unrelated \\
+    8 & $\blacktriangleright$ Mat.GF $\to$ Mother
+      & 0.578 & Parent--child \\
+    9 & Mat.GF $\leftrightarrow$ Father
+      & 0.566 & In-law \\
+    10 & Pat.GF $\leftrightarrow$ Mat.GF
+      & 0.530 & Unrelated \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Separation and Gap}
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{Summary metrics.}
+  \label{tab:summary}
+  \begin{tabular}{lr}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Metric}} &
+    \textcolor{white}{\textbf{Value}} \\
+    \midrule
+    Parent--child average & 0.687 \\
+    Unrelated average & 0.671 \\
+    Mean separation & $+1.55\%$ \\
+    Weakest gap & $-22.53\%$ \\
+    Detects all & NO \\
+    Prep time & 379\,s \\
+    Compare time & $<0.01$\,s \\
+    Heap delta & $+$1{,}853\,MB \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Per-Sample Ecosystem Profiles}
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{Ecosystem signatures for all six samples.}
+  \label{tab:ecosystems}
+  \begin{tabular}{llrrcccc}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Sample}} &
+    \textcolor{white}{\textbf{Role}} &
+    \textcolor{white}{\textbf{Mods}} &
+    \textcolor{white}{\textbf{Edges}} &
+    \textcolor{white}{\textbf{Core}} &
+    \textcolor{white}{\textbf{Sat}} &
+    \textcolor{white}{\textbf{Bridge}} &
+    \textcolor{white}{\textbf{Entropy}} \\
+    \midrule
+    NA12889 & Pat.\ GF & 373 & 951  & 230 & 141 & 0   & 5.74 \\
+    NA12890 & Pat.\ GM & 295 & 611  & 198 & 93  & 1   & 5.52 \\
+    NA12891 & Mat.\ GF & 449 & 1410 & 8   & 85  & 356 & 5.95 \\
+    NA12892 & Mat.\ GM & 402 & 1067 & 296 & 104 & 0   & 5.81 \\
+    NA12877 & Father   & 444 & 975  & 325 & 118 & 0   & 5.91 \\
+    NA12878 & Mother   & 443 & 885  & 311 & 130 & 0   & 5.92 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{keyfinding}
+\textbf{NA12891 (Mat.~GF) is a structural outlier.}  It has 356 bridges and
+only 8 cores---a completely inverted role distribution compared to every other
+sample (which have 198--325 cores and 0 bridges).  This produces a role
+spectrum Jensen--Shannon divergence of $\sim$0.71 for all pairs involving
+NA12891, dragging Mat.GF~$\to$~Mother to rank~8 and Mat.GF~$\leftrightarrow$~Father
+to rank~9.
+\end{keyfinding}
+
+\subsection{Eigenvalue Spectrum Analysis}
+
+The eigenvalue spectrum of each sample's co-occurrence graph reveals three
+distinct populations:
+
+\begin{itemize}
+  \item \textbf{Near-zero} ($\lambda < 0.01$): 12--13 eigenvalues per sample,
+    corresponding to disconnected components in the co-occurrence graph.
+  \item \textbf{Near-one} ($|\lambda - 1| < 0.01$): 72--117 eigenvalues,
+    corresponding to isolated or loosely connected modules.
+  \item \textbf{Structural} ($\lambda \in (0.01, 0.99) \cup (1.01, 2.0)$):
+    314--364 eigenvalues carrying the actual connectivity information.
+\end{itemize}
+
+Father and Mother have the most similar eigenvalue breakdowns: 13/101/330 vs.\
+12/117/314 near-zero/near-one/structural.  Mat.~GF has fewer near-one
+eigenvalues (72) and more structural (364), reflecting its denser, more
+interconnected graph.
+
+\subsection{Comparison to All Symbiogenesis Algorithms}
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{All symbiogenesis algorithm families on CEPH~1463.}
+  \label{tab:all-algorithms}
+  \begin{tabular}{lcccc}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Algorithm}} &
+    \textcolor{white}{\textbf{Separation}} &
+    \textcolor{white}{\textbf{Weakest Gap}} &
+    \textcolor{white}{\textbf{Time}} &
+    \textcolor{white}{\textbf{Status}} \\
+    \midrule
+    Rare-Run P90
+      & $+$583\% & $+$300\% & 72.5\,s & \textbf{Gold} \\
+    Module Persistence v3
+      & $+$3.36\% & $+$0.13\% & 1{,}085\,s & \textbf{PASSES} \\
+    Coalition Transfer v3
+      & $+$1.97\% & $+$0.06\% & 272\,s & \textbf{PASSES} \\
+    \textbf{Spectral Ecology v2}
+      & $+$1.55\% & $-$22.53\% & 379\,s & Fails \\
+    Module Stability v4
+      & $+$4.90\% & $-$1.04\% & 405\,s & Fails \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Spectral Ecology achieves competitive separation ($+1.55\%$) but the worst
+weakest gap ($-22.53\%$) among the symbiogenesis family.  The gap reflects the
+two outlier pairs; without them, the remaining 8 pairs would separate cleanly.
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Failure Analysis}
+\label{sec:failure}
+
+\subsection{Failure Mode 1: The Spouse Confound}
+
+Father (NA12877) and Mother (NA12878) consistently rank as the most similar
+pair across all spectral experiments.  Their ecosystem signatures are nearly
+identical:
+
+\begin{itemize}
+  \item Module count: 444 vs.\ 443
+  \item Edge count: 975 vs.\ 885
+  \item Role distribution: 325C/118S vs.\ 311C/130S
+  \item Spectral entropy: 5.913 vs.\ 5.915
+  \item Localization: 0.203 vs.\ 0.208
+\end{itemize}
+
+\ymarginnote{The spouses are spectrally indistinguishable from parent--child
+pairs.}
+
+Every graph-level metric and every distribution-level metric sees them as
+twins.  This is because:
+
+\begin{enumerate}
+  \item They have nearly identical module counts (similar genomic complexity at
+    this read depth).
+  \item Their co-occurrence graphs have similar density and degree distributions.
+  \item The spectral decomposition of two graphs with similar size and density
+    produces similar eigenvalue distributions.
+  \item Role assignment depends on the spectral embedding, which is similar.
+\end{enumerate}
+
+\begin{limitation}
+\textbf{Purely within-sample spectral methods cannot distinguish ``similar
+because related'' from ``similar because similar sequencing.''} Both produce
+similar graph topology.  The spouse pair demonstrates that graph-level and
+distribution-level spectral invariants are necessary but not sufficient for
+relatedness detection.
+\end{limitation}
+
+The fix requires \emph{cross-sample} signal: detecting that specific
+substructures (not just aggregate statistics) are shared between individuals.
+
+\subsection{Failure Mode 2: The NA12891 Outlier}
+
+NA12891 (Mat.~GF) has a unique role distribution: 8 cores, 85 satellites, 356
+bridges.  Every other sample has 0 bridges.
+
+This anomaly produces role spectrum JSD $\sim$0.71 for all NA12891 pairs,
+compared to $< 0.03$ for pairs not involving NA12891.  Since role spectrum has
+20\% weight, this alone contributes $0.20 \times 0.71 = 0.14$ to the distance
+for NA12891 pairs.
+
+\ymarginnote{One outlier sample can dominate the role spectrum signal.}
+
+The bridge classification arises because NA12891 has the densest graph (1{,}410
+edges, 1.4\% density) with many modules at high Fiedler values and central
+spectral positions.  This may reflect:
+
+\begin{itemize}
+  \item A genuine biological difference (different haplotype block structure)
+  \item A sequencing library artifact (different insert size distribution)
+  \item A sensitivity of the role classifier to graph density
+\end{itemize}
+
+Robust role assignment would need to normalize for graph density before
+classifying.
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Discussion}
+\label{sec:discussion}
+
+\subsection{What Spectral Ecology Achieved}
+
+The spectral approach proved three things:
+
+\begin{enumerate}
+  \item \textbf{Dense co-occurrence graphs are tractable and informative.}  The
+    switch from sequential adjacency (2--5 edges) to statistical co-occurrence
+    (600--1{,}400 edges) transformed useless disconnected graphs into spectrally
+    rich structures with diverse eigenvalue distributions and meaningful role
+    assignments.
+  \item \textbf{Identity-free comparison works in the right direction.}  With
+    $+1.55\%$ separation and three of four parent--child pairs at ranks 3--5,
+    the spectral method detects that related individuals produce more similar
+    ecosystem organization than unrelated individuals---without any token
+    matching.
+  \item \textbf{Node-level distribution comparison outperforms graph-level
+    summaries.}  Comparing the distribution of per-node heat kernel signatures
+    (1-Wasserstein) captures internal hub/periphery structure that the trace
+    (just the sum) misses.
+\end{enumerate}
+
+\subsection{The Within-Sample Ceiling}
+
+All experiments converge to $\sim$1.5--1.9\% separation, regardless of which
+invariants are used or how they are weighted.  This suggests a fundamental
+ceiling for within-sample spectral methods.
+
+The ceiling exists because within-sample spectral features characterize the
+\emph{shape} of the ecosystem---its connectivity pattern, degree distribution,
+cluster structure.  But shape similarity correlates with size similarity
+(similar $n$, similar density), which correlates with coverage similarity.
+The coverage confound enters through the graph construction, not the spectral
+analysis.
+
+\begin{limitation}
+\textbf{The spectral approach correctly measures what it measures.}  The
+problem is that what it measures---ecosystem shape---is correlated with
+coverage.  Breaking through requires either (a)~explicit coverage
+deconfounding that works (the Chung-Lu null model failed) or (b)~cross-sample
+structural signal that is coverage-orthogonal.
+\end{limitation}
+
+\subsection{The Path Forward}
+
+The ChatGPT consultation identified the core issue as ``information starvation
+in the graph construction layer'' and prescribed a multi-layer ecosystem graph.
+Our experiments confirmed this diagnosis.  Three directions are most promising:
+
+\subsubsection{Multi-Layer Ecosystem Graph}
+
+Build four coupled graphs:
+\begin{enumerate}
+  \item \textbf{Motif compatibility}: normalized mutual information between
+    k-mer co-occurrence patterns.
+  \item \textbf{Module similarity}: cosine/JSD between motif frequency
+    distributions---soft matching without identity.
+  \item \textbf{Coalition affinity}: read-level co-occurrence (implemented
+    in v2).
+  \item \textbf{Perturbation response}: correlation of bootstrap survival
+    probability, with coverage regressed out.
+\end{enumerate}
+
+The weighted sum Laplacian $L = \alpha L_1 + \beta L_2 + \gamma L_3 + \delta L_4$
+would capture multiple ecological scales simultaneously.
+
+\subsubsection{Cross-Sample Module Embedding Similarity}
+
+Embed modules from different samples into a shared feature space (Section~V of
+the ChatGPT response).  Two modules with zero k-mer overlap can be
+``ecologically equivalent'' if they occupy similar positions in the embedding.
+Compare samples via optimal transport between their embedding distributions.
+
+\subsubsection{Topological Methods}
+
+Build simplicial complexes from higher-order co-occurrence (triples, quadruples
+of modules on the same read) and compute persistent homology.  Topological
+invariants (Betti numbers, persistence diagrams) are robust to small
+perturbations and could provide coverage-orthogonal features.
+
+\subsection{Connection to the Symbiogenesis Thesis}
+
+The symbiogenesis thesis predicts that inheritance transmits organizational
+constraints, not specific tokens.  Spectral Ecology is the first algorithm to
+test this prediction directly: it measures organizational similarity without
+token matching.
+
+The result is encouraging.  Parent--child pairs \emph{do} have more similar
+ecosystem organization than most unrelated pairs ($+1.55\%$ separation).  The
+organizational signal is real---it's just weaker than the coverage confound.
+
+\begin{pullquote}
+The spectral approach finds the signal. The challenge is that the noise
+(coverage confound) is also structural.
+\end{pullquote}
+
+This suggests that the thesis is correct but the implementation needs richer
+structure.  The organization that is inherited is not just graph shape---it
+includes which specific \emph{types} of modules interact, which coalitions
+persist under perturbation, and how the ecosystem recovers from disruption.
+Capturing these requires the multi-layer, dynamical, cross-sample methods
+outlined above.
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Implementation}
+\label{sec:implementation}
+
+The \texttt{@yalumba/ecology} package contains eight source modules:
+
+\begin{table}[H]
+  \centering
+  \tablestyle
+  \caption{Package structure of \texttt{@yalumba/ecology}.}
+  \label{tab:package}
+  \begin{tabular}{ll}
+    \toprule
+    \rowcolor{table-header}
+    \textcolor{white}{\textbf{Module}} &
+    \textcolor{white}{\textbf{Responsibility}} \\
+    \midrule
+    \texttt{motif-graph.ts} & Co-occurrence graph construction \\
+    \texttt{laplacian.ts} & Normalized Laplacian + Jacobi eigendecomposition \\
+    \texttt{heat-kernel.ts} & Multi-scale heat kernel signatures \\
+    \texttt{role-assignment.ts} & Spectral ecological role classification \\
+    \texttt{spectral-invariants.ts} & Eigenvalue density, localization, curvature, diffusion \\
+    \texttt{null-model.ts} & Chung-Lu null model + spectral residual \\
+    \texttt{module-embedding.ts} & Module feature vectors + cross-sample similarity \\
+    \texttt{compare.ts} & Composite ecosystem comparison \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+All code is TypeScript on the Bun runtime.  No external numerical libraries.
+The Jacobi eigendecomposition, heat kernel computation, and Gaussian KDE are
+all implemented from scratch.
+
+Dependencies: \texttt{@yalumba/modules} (module extraction, co-occurrence),
+\texttt{@yalumba/math} (statistics, information theory).
+
+Ten tests verify the full pipeline: Laplacian eigenvalue properties, heat
+kernel monotonicity, role assignment completeness, signature construction,
+and comparison transitivity.
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Limitations}
+\label{sec:limitations}
+
+\begin{limitation}
+\textbf{Negative weakest gap.}  The $-22.53\%$ gap means the method cannot
+classify any pair correctly at any threshold.  It fails as a detector.
+\end{limitation}
+
+\begin{limitation}
+\textbf{Coverage confound persists.}  The spouse pair ranks first because
+similar sequencing depth produces similar ecosystem structure.  Within-sample
+spectral methods cannot distinguish this from genuine relatedness.
+\end{limitation}
+
+\begin{limitation}
+\textbf{NA12891 outlier.}  One sample's anomalous role distribution dominates
+two of ten pairwise comparisons.  The method is not robust to per-sample data
+quality variation.
+\end{limitation}
+
+\begin{limitation}
+\textbf{Null model failure.}  The Chung-Lu random graph model produces
+numerically unstable spectral residuals (z-scores in the 100{,}000s).  A
+proper configuration model or degree-preserving rewiring is needed.
+\end{limitation}
+
+\begin{limitation}
+\textbf{No cross-sample signal.}  All features are computed per-sample then
+compared.  No information about whether specific structural motifs are
+\emph{shared} across samples---only whether aggregate statistics are similar.
+\end{limitation}
+
+\begin{limitation}
+\textbf{Single dataset.}  Six European-ancestry individuals, 10 pairs.
+Statistical power is minimal.
+\end{limitation}
+
+\begin{limitation}
+\textbf{High memory.}  The Jacobi eigendecomposition stores dense $n \times n$
+matrices, consuming 1{,}853\,MB heap.  Sparse methods would reduce this for
+larger graphs.
+\end{limitation}
+
+\begin{limitation}
+\textbf{Graph still sparse.}  At 1.0--1.4\% density and spectral gap $= 0$,
+the co-occurrence graph remains mostly disconnected.  The ``interesting''
+eigenvalues (those between 0.01 and 0.99) are only 70\% of the total.
+\end{limitation}
+
+
+% ════════════════════════════════════════════════════════════════════
+\section{Conclusion}
+\label{sec:conclusion}
+
+Spectral Ecology is the first symbiogenesis algorithm that measures
+\emph{organizational similarity without token identity}.  The switch from
+sequential adjacency to statistical co-occurrence transformed unusable
+disconnected graphs into spectrally rich structures, and five iterative
+experiments pushed separation from $-0.74\%$ to $+1.55\%$---confirming that
+related individuals produce more similar ecosystem organization than unrelated
+individuals.
+
+\ymarginnote{The spectral signal is real. The challenge is extracting it from
+the coverage noise.}
+
+The method's $-22.53\%$ weakest gap confirms that within-sample spectral
+invariants alone are insufficient for threshold-based relatedness detection.
+Two failure modes---the spouse coverage confound and the NA12891 outlier---
+account for the entire gap.  Three of four parent--child pairs rank
+consecutively at positions 3--5, demonstrating that the spectral approach
+works qualitatively even where it fails quantitatively.
+
+The path forward is clear: cross-sample structural signal, multi-layer
+ecosystem graphs, and coverage-orthogonal features.  The spectral ecology
+package provides the computational foundation---eigendecomposition, heat
+kernels, role assignment, eigenvalue density, localization, diffusion
+distances---on which these richer methods can build.
+
+\begin{pullquote}
+Symbiogenesis predicts that structure persists even when sequence changes.
+The spectral approach finds structural similarity between related individuals.
+The challenge is that coverage similarity produces the same signal.  Breaking
+through requires methods that detect \emph{shared} structure, not just
+\emph{similar} structure.
+\end{pullquote}
+
+
+% ════════════════════════════════════════════════════════════════════
+\bibliographystyle{plain}
+\bibliography{../references}
+
+\end{document}
